@@ -214,6 +214,7 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
     static Uint64 sLastCbNs = 0, sWindowNs = 0;
     static double sMaxGap = 0.0, sReqMs = 0.0, sMaxWorkMs = 0.0, sSumWorkMs = 0.0;
     static int sCbCount = 0, sUnderruns = 0;
+    static long sFramesReq = 0;
     Uint64 workStart = 0;
     if (trace) {
         /* Zero I/O on the audio callback thread: accumulate in statics and
@@ -229,14 +230,16 @@ static void Port_Audio_Feed(void* userdata, SDL_AudioStream* stream, int additio
             if (gapMs > sReqMs + 0.5)
                 sUnderruns++; /* time outran the buffer = crackle */
             sCbCount++;
+            sFramesReq += additional_amount / PORT_AUDIO_BYTES_PER_FRAME;
         }
         sLastCbNs = now;
         workStart = now;
         if (now - sWindowNs >= 1000000000ULL) {
             if (sCbCount) {
                 fprintf(stderr,
-                        "[audio] 1s: %d cb, req=%.1fms maxgap=%.1fms underruns=%d | work avg=%.1fms max=%.1fms\n",
-                        sCbCount, sReqMs, sMaxGap, sUnderruns, sSumWorkMs / sCbCount, sMaxWorkMs);
+                        "[audio] 1s: %d cb, req=%.1fms maxgap=%.1fms underruns=%d | work avg=%.1fms max=%.1fms | frames/s=%ld\n",
+                        sCbCount, sReqMs, sMaxGap, sUnderruns, sSumWorkMs / sCbCount, sMaxWorkMs, sFramesReq);
+                sFramesReq = 0;
             }
             sWindowNs = now;
             sMaxGap = 0.0;
@@ -372,6 +375,14 @@ bool Port_Audio_Init(void) {
         return false;
     }
 
+    {
+        SDL_AudioSpec dev;
+        int devFrames = 0;
+        if (SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(sAudioStream), &dev, &devFrames)) {
+            fprintf(stderr, "[audio] stream %d Hz -> device %d Hz, %d ch, fmt 0x%x, %d frames/buffer\n",
+                    PORT_AUDIO_SAMPLE_RATE, dev.freq, dev.channels, (unsigned)dev.format, devFrames);
+        }
+    }
     if (!SDL_ResumeAudioStreamDevice(sAudioStream)) {
         SDL_Log("Port_Audio_Init: SDL_ResumeAudioStreamDevice failed: %s", SDL_GetError());
         SDL_DestroyAudioStream(sAudioStream);
