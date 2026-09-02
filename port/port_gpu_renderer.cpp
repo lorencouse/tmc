@@ -796,6 +796,7 @@ extern "C" bool Port_GPU_PresentFrame(const uint32_t* fb, int fb_w, int fb_h, in
                 aspW = 32;
                 aspH = 9;
                 break;
+            case PORT_ASPECT_STRETCH:
             case PORT_ASPECT_NATIVE_3_2:
             default:
                 /* "No constraint": stage spans the whole swapchain (see
@@ -818,7 +819,10 @@ extern "C" bool Port_GPU_PresentFrame(const uint32_t* fb, int fb_w, int fb_h, in
         stageX = (w - stageW) / 2;
         stageY = (h - stageH) / 2;
 
-        if (stageW * FH >= stageH * FW) {
+        if (mode == PORT_ASPECT_STRETCH) {
+            frameW = stageW;
+            frameH = stageH;
+        } else if (stageW * FH >= stageH * FW) {
             frameH = stageH;
             frameW = (stageH * FW) / FH;
         } else {

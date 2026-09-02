@@ -653,6 +653,8 @@ extern "C" void Port_Config_Load(const char* path) {
                 sAspectMode = PORT_ASPECT_ULTRAWIDE_21_9;
             else if (am == "32:9" || am == "super_ultrawide")
                 sAspectMode = PORT_ASPECT_SUPER_ULTRAWIDE_32_9;
+            else if (am == "stretch" || am == "fill")
+                sAspectMode = PORT_ASPECT_STRETCH;
             else
                 sAspectMode = PORT_ASPECT_NATIVE_3_2;
 
@@ -971,6 +973,8 @@ extern "C" const char* Port_Config_AspectModeName(PortAspectMode mode) {
             return "Ultrawide 21:9";
         case PORT_ASPECT_SUPER_ULTRAWIDE_32_9:
             return "Super Ultrawide 32:9";
+        case PORT_ASPECT_STRETCH:
+            return "Stretch to fill";
         case PORT_ASPECT_NATIVE_3_2:
         default:
             return "Native 3:2 (GBA)";
@@ -991,6 +995,9 @@ extern "C" void Port_Config_SetAspectMode(PortAspectMode mode) {
             break;
         case PORT_ASPECT_SUPER_ULTRAWIDE_32_9:
             name = "32:9";
+            break;
+        case PORT_ASPECT_STRETCH:
+            name = "stretch";
             break;
         case PORT_ASPECT_NATIVE_3_2:
         default:

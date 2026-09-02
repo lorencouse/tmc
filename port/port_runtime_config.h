@@ -110,6 +110,9 @@ typedef enum {
     PORT_ASPECT_WIDESCREEN_16_9 = 1,
     PORT_ASPECT_ULTRAWIDE_21_9 = 2,
     PORT_ASPECT_SUPER_ULTRAWIDE_32_9 = 3,
+    /* Fill the whole window, ignoring the GBA's 3:2 ratio (a 4:3 handheld
+     * panel gets a ~12% vertical stretch instead of letterbox bars). */
+    PORT_ASPECT_STRETCH = 4,
     PORT_ASPECT_COUNT,
 } PortAspectMode;
 PortAspectMode Port_Config_AspectMode(void);

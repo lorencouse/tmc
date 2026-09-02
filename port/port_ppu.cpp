@@ -317,6 +317,7 @@ static void Port_PPU_ComputeViewportRects(int outW, int outH, int fbW, int fbH, 
             aspW = 32;
             aspH = 9;
             break;
+        case PORT_ASPECT_STRETCH:
         case PORT_ASPECT_NATIVE_3_2:
         default:
             /* "No constraint": the stage spans the whole window. With the
@@ -329,6 +330,14 @@ static void Port_PPU_ComputeViewportRects(int outW, int outH, int fbW, int fbH, 
             break;
     }
     Port_PPU_FitAspectRect(outW, outH, aspW, aspH, stageX, stageY, stageW, stageH);
+    if (mode == PORT_ASPECT_STRETCH) {
+        // Stretch: the frame is the whole stage, aspect be damned.
+        *frameX = *stageX;
+        *frameY = *stageY;
+        *frameW = *stageW;
+        *frameH = *stageH;
+        return;
+    }
     // Inside the stage, fit the GBA frame at its native 3:2.
     int fx, fy, fw, fh;
     Port_PPU_FitAspectRect(*stageW, *stageH, FW, FH, &fx, &fy, &fw, &fh);
