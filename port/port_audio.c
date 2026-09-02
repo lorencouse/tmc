@@ -8,7 +8,15 @@
 #include <math.h>
 
 enum {
+#if defined(__linux__) && defined(__aarch64__)
+    /* Linux aarch64 handhelds: the RG35XX SP's codec clock is only honest at
+     * 44.1 kHz (its "48000" runs fast: tempo up, periodic dropouts), and any
+     * 48k->44.1k conversion in the client costs ~4 xruns/s on the A53. Render
+     * at the codec's native rate instead. */
+    PORT_AUDIO_SAMPLE_RATE = 44100,
+#else
     PORT_AUDIO_SAMPLE_RATE = 48000,
+#endif
     PORT_AUDIO_CHANNELS = 2,
     PORT_AUDIO_BYTES_PER_FRAME = sizeof(int16_t) * PORT_AUDIO_CHANNELS,
 };
