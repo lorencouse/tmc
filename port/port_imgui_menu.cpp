@@ -98,6 +98,25 @@ const char* Port_DebugMenu_Toast(void);                 /* NULL if expired */
 static bool sImGuiInited = false;
 static bool sRibbonEnabled = true; /* Office-style ribbon at top */
 static SDL_Window* sWindow = nullptr;
+
+/* See the small-display pass in Port_ImGui_Init: one scale factor for
+ * fonts, style metrics and the fixed pixel panel sizes. */
+static SDL_Window* sUiScaleWindow = NULL;
+static float Port_UiScale(void) {
+    static float sScale = -1.0f;
+    if (sScale < 0.0f) {
+        const char* e = getenv("TMC_UI_SCALE");
+        float v = (e && *e) ? (float)atof(e) : 0.0f;
+        if (v <= 0.0f) {
+            int w = 0, h = 0;
+            if (sUiScaleWindow) SDL_GetWindowSize(sUiScaleWindow, &w, &h);
+            v = (w > 0 && w < 400) ? 0.5f : 1.0f;
+        }
+        sScale = v;
+    }
+    return sScale;
+}
+
 static SDL_Renderer* sRenderer = nullptr;
 
 extern "C" void Port_ImGui_Init(SDL_Window* window, SDL_Renderer* renderer) {
@@ -167,6 +186,19 @@ extern "C" void Port_ImGui_Init(SDL_Window* window, SDL_Renderer* renderer) {
      * are crisp enough at native resolution for menu use, and big
      * enough to be readable on the Deck at hand-held distance. */
     io.FontGlobalScale = 1.4f;
+    /* Small-display pass (Linux handhelds): the panels below are sized in
+     * pixels for >=640 px wide windows. TMC_UI_SCALE=<float> scales fonts,
+     * style metrics and every fixed panel width; unset, it defaults to 0.5
+     * when the window is narrower than 400 px (e.g. a 320x240 X screen that
+     * a compositor upscales 2x), else 1.0. */
+    {
+        sUiScaleWindow = window;
+        const float s = Port_UiScale();
+        if (s != 1.0f) {
+            io.FontGlobalScale *= s;
+            style.ScaleAllSizes(s);
+        }
+    }
 #ifdef __ANDROID__
     /* Touch pass: a tablet is driven by fingers at arm's length, not a
      * pointer. Scale the whole style so every hit target clears ~48dp
@@ -2398,7 +2430,7 @@ static void DrawRandoTrackerOverlay(void) {
         }
     }
 
-    ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(600 * Port_UiScale(), 400 * Port_UiScale()), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Randomizer HUD Tracker", &sShowRandoTracker, ImGuiWindowFlags_NoCollapse)) {
         if (ImGui::BeginTabBar("##tracker_tabs")) {
             if (ImGui::BeginTabItem("Items")) {
@@ -3830,7 +3862,7 @@ static void DrawMenuPage(int depth) {
         return;
 
     ImGuiIO& io = ImGui::GetIO();
-    const float panelW = 460.0f;
+    const float panelW = 460.0f * Port_UiScale();
     const float maxH = io.DisplaySize.y * 0.85f;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always,
                             ImVec2(0.5f, 0.5f));
@@ -4036,7 +4068,7 @@ static void DrawRandoFileMenuModal(void) {
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float padding = 12.0f;
-    const float sidebarW = 380.0f;
+    const float sidebarW = 380.0f * Port_UiScale();
     const float sidebarH = vp->WorkSize.y - 2 * padding;
 
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - sidebarW - padding, vp->Pos.y + padding), ImGuiCond_Always);
@@ -4293,7 +4325,7 @@ extern "C" bool Port_ImGui_Render(void) {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Always,
                                 ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(380, 0));
+        ImGui::SetNextWindowSize(ImVec2(380 * Port_UiScale(), 0));
         if (ImGui::Begin("##softslot_config", nullptr,
                          ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings)) {
@@ -4467,7 +4499,7 @@ extern "C" bool Port_ImGui_RenderExtractProgress(const char* phase, float fracti
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImVec2 center(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f);
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(440 * Port_UiScale(), 0), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(28, 24));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
     if (ImGui::Begin("##extract_progress", nullptr,
@@ -4540,7 +4572,7 @@ extern "C" bool Port_ImGui_RenderPrelaunch(bool rom_present, const char* version
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImVec2 viewport_center(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f);
     ImGui::SetNextWindowPos(viewport_center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(620, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(620 * Port_UiScale(), 0), ImGuiCond_Always);
     /* Cap the card's auto-height to the visible work area so a small or
      * default-sized window never pushes the Select ROM / Play buttons
      * off-screen; with the scrollbar enabled (below) they stay reachable

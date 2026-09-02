@@ -193,7 +193,10 @@ static AgbplaySoundMode MakeAgbplayMode(void) {
      * NEAREST's raw aliasing, so the enhanced path stays smooth on Android while
      * fitting the CPU budget. Desktop keeps SINC (the cleanest resampler; cost is
      * irrelevant there). GBA-accurate mode is NEAREST everywhere (hardware exact). */
-#ifdef __ANDROID__
+    /* Linux aarch64 handhelds (RG35XX SP: 4x Cortex-A53 @ 1.5 GHz) hit the
+     * same wall as the Moto G4 -- SINC runs the music at half speed and
+     * stutters on the title screen -- so they take the Android path too. */
+#if defined(__ANDROID__) || (defined(__linux__) && defined(__aarch64__))
     const ResamplerType enhancedRs = ResamplerType::LINEAR;
 #else
     const ResamplerType enhancedRs = ResamplerType::SINC;
