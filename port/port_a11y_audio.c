@@ -11,7 +11,13 @@
 #include <math.h>
 
 /* Must match Port_Audio's output rate (port_audio.c PORT_AUDIO_SAMPLE_RATE). */
+/* Must match PORT_AUDIO_SAMPLE_RATE in port_audio.c (the cues are mixed into
+ * that stream unconverted). */
+#if defined(__linux__) && defined(__aarch64__)
+#define A11Y_SAMPLE_RATE 44100
+#else
 #define A11Y_SAMPLE_RATE 48000
+#endif
 #define A11Y_MAX_VOICES  8
 #define A11Y_CMD_RING    32   /* power-of-two not required; modulo is fine here */
 #define A11Y_TWO_PI      6.283185307179586
