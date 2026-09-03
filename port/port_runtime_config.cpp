@@ -70,6 +70,14 @@ const std::array<Def, PORT_INPUT_COUNT> kDefaults = { {
 
 u8 sScale = 3;
 u8 sInternalScale = 1;
+/* Present cadence while fast-forwarding (Hz). Every present skipped during
+ * fast-forward is engine time won back, so low-power targets set this well
+ * below the refresh (the RG35XX SP ships 15: a ~8 ms software copy per
+ * present at 60 Hz was half the fast-forward budget). */
+int sFastForwardFps = 60;
+/* Re-seat the tick grid on each vsync-blocked present when the display refresh
+ * equals the tick rate (see the decoupled pacer in port_bios.c). */
+bool sVsyncLockTicks = true;
 std::string sUpscaleMethod = "nearest";
 u64 sFrameTimeNs = 1000000000ULL / 60; /* 60 FPS cap by default (VSync-effective); see kDefaultFrameTimeNs */
 bool sPortSettingsMenuEnabled = true;
@@ -266,6 +274,7 @@ const BoolCfg kBoolCfg[] = {
 #endif
     { "console_parity", &sConsoleParity, false },
     { "decouple_render", &sDecoupleRender, true },
+    { "vsync_lock_ticks", &sVsyncLockTicks, true },
     { "show_fps", &sShowFps, false },
     { "tts_enabled", &sTtsEnabled, true },
     { "a11y_cues", &sA11yCues, true },
@@ -311,6 +320,7 @@ const IntCfg kIntCfg[] = {
     { "rando_heart_color", &sRandoHeartColor, 0 },      { "rando_tricks", &sRandoTricks, 0 },
     { "rando_accessibility", &sRandoAccessibility, 0 },
     { "savestate_slot", &sSaveStateSlot, 0 },
+    { "fast_forward_fps", &sFastForwardFps, 60 },
 };
 const StrCfg kStrCfg[] = {
     { "upscale_method", &sUpscaleMethod, "nearest" },
@@ -775,6 +785,17 @@ extern "C" u64 Port_Config_TickTimeNs(void) {
     return kDefaultFrameTimeNs;
 }
 
+extern "C" u32 Port_Config_FastForwardFps(void) {
+    int v = sFastForwardFps;
+    if (v < 5)
+        v = 5;
+    if (v > 240)
+        v = 240;
+    return (u32)v;
+}
+extern "C" bool Port_Config_GetVsyncLockTicks(void) {
+    return sVsyncLockTicks;
+}
 extern "C" bool Port_Config_GetDecoupleRender(void) {
     return sDecoupleRender;
 }

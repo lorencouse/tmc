@@ -4,6 +4,11 @@
 
 ### Added
 
+- **`fast_forward_fps`** (`config.json`, default 60): how often the screen is
+  refreshed while fast-forwarding. Every present skipped during fast-forward
+  is engine time won back, so handhelds with an expensive software present can
+  set this low; the RG35XX SP ships 15. Under decoupled pacing the engine runs
+  flat out between presents either way.
 - **Save states are now rebindable, and reachable without a keyboard.** Four
   new bindable actions — save state, load state, next slot, previous slot —
   join the **F8 → Controls** table, so they can go on a gamepad button or any
@@ -41,6 +46,23 @@
 
 ### Fixed
 
+- **Frame rate under VSync was a coin flip per launch.** With the game ticking
+  on its own fixed 60 Hz grid and presents blocking until the display refresh,
+  the phase between the two was set once at startup and never moved. When a
+  present happened to complete more than half a tick after the tick deadline,
+  the pacer's overload guard engaged its cost-fit check — whose cost estimate
+  is mostly that VSync wait — and then refused nearly every present until the
+  100 ms starvation override, for the rest of the session. Cheap presents hid
+  it on desktops; on a software renderer with a multi-millisecond copy (the
+  RG35XX SP, 640x480 through an X socket) the same binary and config measured
+  60 fps on one launch and 12 on the next. When the refresh matches the tick
+  rate and presents run at that cadence, the loop is now **vsync-locked**: it
+  presents straight after each tick and re-seats the tick grid on the
+  completion time, so every copy is submitted right after a refresh with the
+  rest of the interval as slack. A cycle that misses a refresh is repaid by one
+  un-presented catch-up tick, so game speed holds at the tick rate under mild
+  overload instead of dropping to 30. `vsync_lock_ticks: false` in
+  `config.json` restores the previous behaviour.
 - **Loading a save state mid-game could strand the player off-screen with
   controls dead.** The snapshot covered the four GBA memory arrays and a
   hand-picked few structs, but this port moved nearly all of the GBA's RAM

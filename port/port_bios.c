@@ -600,6 +600,9 @@ static u64 sPresentCostEmaNs = 2000000; /* rolling present cost, seeds 2 ms */
 /* Tick windows left in conservative (EMA fit-check) presenting after a tick
  * closed late under eager-VSync presenting; 0 = eager. See decoupled loop. */
 static u32 sVsyncOverloadHold = 0;
+/* Vsync-locked ticks: >0 means the next tick runs without a present to pay
+ * back a cycle that missed a refresh (see the decoupled pacer). */
+static u32 sVsyncLockCatchUp = 0;
 static u32 sPresentsThisSec = 0;        /* presents in the 1 s FPS-title window */
 
 /* Live rates for the on-screen FPS counter (port_imgui_menu.cpp externs
@@ -913,7 +916,57 @@ void VBlankIntrWait(void) {
          * real-time cadence for feedback while the engine runs free. Under
          * console parity Port_Config_FrameTimeNs pins this to the GBA rate,
          * which intentionally also pins presentation to one-per-tick. */
-        renderPeriodNs = (targetFps != 0 && !sFastForward) ? Port_Config_FrameTimeNs() : 16666667ULL;
+        renderPeriodNs = (targetFps != 0 && !sFastForward) ? Port_Config_FrameTimeNs()
+                         : sFastForward                    ? 1000000000ULL / Port_Config_FastForwardFps()
+                                                           : 16666667ULL;
+
+        /* Vsync-locked ticks. With VSync on, presents at the tick cadence and a
+         * display whose refresh equals the tick rate, the blocking present IS
+         * the clock: present straight after the tick and re-seat the tick grid
+         * on the completion time. Otherwise the tick grid and the refresh sit
+         * at an arbitrary phase fixed for the whole launch, and when a present
+         * completes more than half a tick past the deadline the overload hold
+         * below engages an EMA fit check whose EMA is mostly that vsync wait --
+         * it then refuses nearly every present until the 100 ms starvation
+         * override. On a software renderer with a multi-ms copy (RG35XX SP:
+         * 640x480 over an X socket, ~5-8 ms) that was a coin flip per launch
+         * between 60 fps and ~12. Locked, each copy is submitted `game + copy`
+         * after a refresh with the rest of the interval as slack, so the phase
+         * cannot drift into the bad half. A cycle that misses a refresh is paid
+         * back with one un-presented catch-up tick, keeping game speed at the
+         * tick rate under mild overload instead of halving it. */
+        bool vsyncLocked = false;
+        if (!uncappedTicks && Port_Config_GetVsyncLockTicks() && Port_PPU_VSyncEnabled() &&
+            renderPeriodNs == tickPeriodNs) {
+            unsigned refresh = Port_PPU_DisplayRefreshRate();
+            /* Unknown refresh (headless/dummy) keeps the 60 Hz assumption used
+             * for the VSync ceiling above. */
+            u64 refreshNs = refresh ? 1000000000ULL / refresh : tickPeriodNs;
+            u64 diff = refreshNs > tickPeriodNs ? refreshNs - tickPeriodNs : tickPeriodNs - refreshNs;
+            vsyncLocked = diff * 100 <= tickPeriodNs; /* within 1% */
+        }
+        if (vsyncLocked) {
+            u64 cycleStart = lastFrameNs;
+            if (sVsyncLockCatchUp > 0) {
+                sVsyncLockCatchUp--; /* pay back the overrun: no present this tick */
+                now = SDL_GetTicksNS();
+            } else {
+                Port_PresentOnce(true);
+                Port_PumpEvents();
+                now = SDL_GetTicksNS();
+                if (cycleStart != 0 && now - cycleStart > tickPeriodNs + tickPeriodNs / 2) {
+                    sVsyncLockCatchUp = 1;
+                }
+            }
+            lastFrameNs = now;
+            sNextPresentNs = now + renderPeriodNs; /* sane grid if we leave this mode */
+            sVsyncOverloadHold = 0;
+            if (Port_Profile_Enabled()) {
+                sProfWindowExitNs = SDL_GetTicksNS();
+                Port_ProfileReportMaybe();
+            }
+            goto pacing_done;
+        }
 
         now = entryNs;
         if (tickPeriodNs == 0) {
@@ -1010,6 +1063,7 @@ void VBlankIntrWait(void) {
             sProfWindowExitNs = SDL_GetTicksNS();
             Port_ProfileReportMaybe();
         }
+    pacing_done:;
     }
 
     nowNs = lastFrameNs;

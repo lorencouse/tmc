@@ -176,6 +176,13 @@ back to the first once all twenty are filled, so repeated presses leave a
 rolling history rather than overwriting one state. The selection persists in
 `config.json` (`savestate_slot`).
 
+Two pacing keys matter on low-power handhelds: `fast_forward_fps` (default 60)
+sets how often the screen refreshes while fast-forwarding — lower means faster
+fast-forward when a present is expensive — and `vsync_lock_ticks` (default on)
+lets a VSync-blocked present pace the engine tick when the display refresh
+equals the tick rate, which removes the launch-to-launch frame-rate lottery on
+software renderers.
+
 Within one session a load is exact. A state file written by an **earlier**
 session restores the save file and re-enters the same room at the same
 position via the game's own continue path instead — the snapshot holds host

@@ -58,6 +58,8 @@ u64 Port_Config_FrameTimeNs(void);
 u32 Port_Config_TargetFps(void);
 u64 Port_Config_TickTimeNs(void);
 bool Port_Config_GetDecoupleRender(void);
+u32 Port_Config_FastForwardFps(void);   /* present cadence during fast-forward, Hz (5..240) */
+bool Port_Config_GetVsyncLockTicks(void);
 void Port_Config_SetDecoupleRender(bool on);
 bool Port_Config_GetShowFps(void);
 void Port_Config_SetShowFps(bool on);
