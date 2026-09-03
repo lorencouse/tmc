@@ -600,6 +600,12 @@ static u64 sPresentCostEmaNs = 2000000; /* rolling present cost, seeds 2 ms */
 /* Tick windows left in conservative (EMA fit-check) presenting after a tick
  * closed late under eager-VSync presenting; 0 = eager. See decoupled loop. */
 static u32 sVsyncOverloadHold = 0;
+/* Ticks closed without a present, consecutively. Capped at two: on a
+ * compositor that releases the client buffer late once it goes idle
+ * (RG35XX SP: a present costs ~5 ms while frames stream, ~17 ms after a
+ * pause), skipping presents makes the next one dearer, which the EMA fit
+ * check then refuses -- a spiral down to the 100 ms starvation floor. */
+static u32 sSkippedPresentsInARow = 0;
 /* Vsync-locked ticks: >0 means the next tick runs without a present to pay
  * back a cycle that missed a refresh (see the decoupled pacer). */
 static u32 sVsyncLockCatchUp = 0;
@@ -1059,7 +1065,12 @@ void VBlankIntrWait(void) {
                     if (now - sLastPresentEndNs > 100000000ULL) {
                         Port_PresentOnce(firstOfTick);
                         sNextPresentNs = SDL_GetTicksNS() + renderPeriodNs;
+                        firstOfTick = false;
                     }
+                    if (firstOfTick)
+                        sSkippedPresentsInARow++;
+                    else
+                        sSkippedPresentsInARow = 0;
                     /* Closed-loop overload guard for the eager-VSync path
                      * below. Vsync-blocked presents legitimately fill the
                      * whole tick window (2 x ~8.3 ms at 120-on-120), so a
@@ -1091,7 +1102,7 @@ void VBlankIntrWait(void) {
                      * when we break out). VSync itself paces us — EXCEPT
                      * while the overload hold (set above) is draining. */
                     if ((Port_PPU_VSyncEnabled() && sVsyncOverloadHold == 0) ||
-                        now + sPresentCostEmaNs <= deadline ||
+                        now + sPresentCostEmaNs <= deadline || sSkippedPresentsInARow >= 2 ||
                         now - sLastPresentEndNs > 100000000ULL) {
                         Port_PresentOnce(firstOfTick);
                         firstOfTick = false;
