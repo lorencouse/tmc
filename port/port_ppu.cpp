@@ -43,6 +43,10 @@ extern "C" uint8_t gMain[]; // fix for MSVC (UWP PORT)
 /* Phase-timer hooks (defined in port_bios.c, C linkage). */
 extern "C" int Port_Profile_Enabled(void);
 extern "C" uint64_t gPortProfileRenderNs;
+/* Present-path phase timers (TMC_PACE_LOG): [0] raster+prescale, [1] texture
+ * upload + renderer draw, [2] SDL_RenderPresent (the X copy / vsync sleep). */
+extern "C" uint64_t gPortProfPresentPhaseNs[3];
+uint64_t gPortProfPresentPhaseNs[3] = { 0, 0, 0 };
 /* Port_Widescreen_* lives in port_linked_stubs.c; include
  * port_widescreen.h for the runtime WIP toggle gate. */
 
@@ -1347,6 +1351,7 @@ static bool Port_PPU_TryGpuRaster(void) {
 #endif /* TMC_GPU_RENDERER */
 
 extern "C" void Port_PPU_PresentFrame(void) {
+    const uint64_t phStart = SDL_GetTicksNS();
     uint16_t dispcnt;
     uint8_t gbaMode;
 
@@ -1661,6 +1666,7 @@ extern "C" void Port_PPU_PresentFrame(void) {
          * area honoring the user's aspect-ratio choice). Inside the
          * stage, the chosen background-fill style applies; on top of
          * that, the sharp GBA frame is composited in `dst`. */
+        const uint64_t phUpload = SDL_GetTicksNS();
         SDL_SetRenderDrawColor(sRenderer, 0, 0, 0, 255);
         SDL_RenderClear(sRenderer);
 
@@ -1691,7 +1697,12 @@ extern "C" void Port_PPU_PresentFrame(void) {
             Port_SoftSlots_RenderOverlay(sRenderer, outW, outH);
             Port_TouchControls_Render(sRenderer, outW, outH);
         }
-        if (!SDL_RenderPresent(sRenderer)) {
+        const uint64_t phPresent = SDL_GetTicksNS();
+        const bool presentedOk = SDL_RenderPresent(sRenderer);
+        gPortProfPresentPhaseNs[0] += phUpload - phStart;
+        gPortProfPresentPhaseNs[1] += phPresent - phUpload;
+        gPortProfPresentPhaseNs[2] += SDL_GetTicksNS() - phPresent;
+        if (!presentedOk) {
             /* Log throttled: a failing present on Android (EGL surface loss
              * after lifecycle churn) otherwise dies silently and the screen
              * freezes on the last good frame. */
