@@ -160,6 +160,24 @@ static int sThumbValid[NUM_SLOTS];
  * cached GPU texture is stale without comparing 38 KB of pixels. */
 static u32 sThumbGeneration[NUM_SLOTS];
 
+/* Disk-probe cache.
+ *
+ * HasSlot() and SlotTimestamp() fall back to opening the state file when a
+ * slot is not in memory, and the Saves tab calls both for every row, every
+ * frame. At 23 slots that is thousands of fopen()s a second against an SD
+ * card for information that only changes when we ourselves write a slot. So
+ * probe once and remember; a save refreshes the entry, and after a save the
+ * in-memory copy answers anyway.
+ *
+ * A slot deleted out from under us mid-session goes stale, which is no worse
+ * than the in-memory path already was, and nothing writes these files but us. */
+static int sDiskProbed[NUM_SLOTS];
+static int sDiskExists[NUM_SLOTS];
+static u64 sDiskSavedAt[NUM_SLOTS];
+/* Separate from the above: a state can exist with no .thumb sidecar (written
+ * by an older build), and we must not re-open the missing file every frame. */
+static int sThumbProbed[NUM_SLOTS];
+
 static Slot sSlots[NUM_SLOTS];
 static int sAutoNextSlot = AUTO_SLOT_BASE; /* round-robin cursor */
 static u64 sAutoLastSaveTicksMs = 0;
@@ -625,6 +643,12 @@ int Port_QuickSave_SaveSlot(int slot) {
      * snapshot still works for the session. */
     WriteSlotToDisk(slot);
     WriteThumbToDisk(slot);
+    /* The files just changed under the probe cache; re-seed it rather than
+     * invalidating, since we already know both answers. */
+    sDiskProbed[slot] = 1;
+    sDiskExists[slot] = 1;
+    sDiskSavedAt[slot] = sSlots[slot].saved_at_unix;
+    sThumbProbed[slot] = 1;
     fprintf(stderr, "[quicksave] slot %d saved (%zu bytes)\n", slot, sSlots[slot].bytes);
     return 1;
 }
@@ -658,6 +682,28 @@ int Port_QuickSave_LoadSlot(int slot) {
     return 1;
 }
 
+/* Reads the on-disk header once per slot and caches existence + timestamp. */
+static void ProbeSlotOnDisk(int slot) {
+    if (slot < 0 || slot >= NUM_SLOTS || sDiskProbed[slot])
+        return;
+    sDiskProbed[slot] = 1;
+    sDiskExists[slot] = 0;
+    sDiskSavedAt[slot] = 0;
+
+    char path[64];
+    SlotFilename(slot, path, sizeof(path));
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return;
+    sDiskExists[slot] = 1;
+    u32 magic = 0, version = 0, total = 0;
+    u64 saved_at = 0;
+    if (ReadSlotHeader(f, &magic, &version, &total, &saved_at)) {
+        sDiskSavedAt[slot] = saved_at;
+    }
+    fclose(f);
+}
+
 int Port_QuickSave_HasSlot(int slot) {
     if (slot < 0 || slot >= NUM_SLOTS)
         return 0;
@@ -665,13 +711,8 @@ int Port_QuickSave_HasSlot(int slot) {
         return 1;
     /* Probe disk so the menu can label populated-on-disk slots correctly
      * before the user touches them. */
-    char path[64];
-    SlotFilename(slot, path, sizeof(path));
-    FILE* f = fopen(path, "rb");
-    if (!f)
-        return 0;
-    fclose(f);
-    return 1;
+    ProbeSlotOnDisk(slot);
+    return sDiskExists[slot];
 }
 
 /* ---- Practice point -------------------------------------------------- *
@@ -718,19 +759,8 @@ u64 Port_QuickSave_SlotTimestamp(int slot) {
         return sSlots[slot].saved_at_unix;
     /* Probe the disk file's timestamp header so the menu can show
      * "last saved" even for slots that haven't been loaded into memory. */
-    char path[64];
-    SlotFilename(slot, path, sizeof(path));
-    FILE* f = fopen(path, "rb");
-    if (!f)
-        return 0;
-    u32 magic = 0, version = 0, total = 0;
-    u64 saved_at = 0;
-    if (ReadSlotHeader(f, &magic, &version, &total, &saved_at)) {
-        fclose(f);
-        return saved_at;
-    }
-    fclose(f);
-    return 0;
+    ProbeSlotOnDisk(slot);
+    return sDiskSavedAt[slot];
 }
 
 /* Legacy single-slot API — slot 0 is the F5/F6 quicksave. */
@@ -915,7 +945,8 @@ void Port_QuickSave_ThumbnailSize(int* w, int* h) {
 const unsigned char* Port_QuickSave_SlotThumbnail(int slot) {
     if (slot < 0 || slot >= NUM_SLOTS)
         return NULL;
-    if (!sThumbValid[slot] && Port_QuickSave_HasSlot(slot)) {
+    if (!sThumbValid[slot] && !sThumbProbed[slot] && Port_QuickSave_HasSlot(slot)) {
+        sThumbProbed[slot] = 1;
         ReadThumbFromDisk(slot);
     }
     return sThumbValid[slot] ? sThumbs[slot] : NULL;
