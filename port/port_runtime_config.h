@@ -113,6 +113,12 @@ typedef enum {
     /* Fill the whole window, ignoring the GBA's 3:2 ratio (a 4:3 handheld
      * panel gets a ~12% vertical stretch instead of letterbox bars). */
     PORT_ASPECT_STRETCH = 4,
+    /* Integer ("pixel perfect"): scale by the largest whole multiple of
+     * 240x160 that fits, centered, with bars around it. Every game pixel
+     * becomes an identical NxN block, so nothing shimmers and no pixel is
+     * wider than its neighbour -- the fractional modes above land source
+     * pixels in uneven runs (1.333x gives a 2,1,1 pattern). */
+    PORT_ASPECT_PIXEL_PERFECT = 5,
     PORT_ASPECT_COUNT,
 } PortAspectMode;
 PortAspectMode Port_Config_AspectMode(void);

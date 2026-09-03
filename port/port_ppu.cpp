@@ -318,6 +318,7 @@ static void Port_PPU_ComputeViewportRects(int outW, int outH, int fbW, int fbH, 
             aspH = 9;
             break;
         case PORT_ASPECT_STRETCH:
+        case PORT_ASPECT_PIXEL_PERFECT:
         case PORT_ASPECT_NATIVE_3_2:
         default:
             /* "No constraint": the stage spans the whole window. With the
@@ -337,6 +338,25 @@ static void Port_PPU_ComputeViewportRects(int outW, int outH, int fbW, int fbH, 
         *frameW = *stageW;
         *frameH = *stageH;
         return;
+    }
+    if (mode == PORT_ASPECT_PIXEL_PERFECT) {
+        // Largest whole multiple of the GBA frame that fits, centered.
+        // Nearest-neighbour at a non-integer ratio gives source pixels of
+        // differing widths (1.333x -> a repeating 2,1,1); an integer ratio
+        // makes every one an identical block. Below 1x there is no integer
+        // option, so fall through to the aspect fit.
+        int mult = *stageW / FW;
+        const int multV = *stageH / FH;
+        if (multV < mult) {
+            mult = multV;
+        }
+        if (mult >= 1) {
+            *frameW = FW * mult;
+            *frameH = FH * mult;
+            *frameX = *stageX + (*stageW - *frameW) / 2;
+            *frameY = *stageY + (*stageH - *frameH) / 2;
+            return;
+        }
     }
     // Inside the stage, fit the GBA frame at its native 3:2.
     int fx, fy, fw, fh;

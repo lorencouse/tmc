@@ -797,6 +797,7 @@ extern "C" bool Port_GPU_PresentFrame(const uint32_t* fb, int fb_w, int fb_h, in
                 aspH = 9;
                 break;
             case PORT_ASPECT_STRETCH:
+            case PORT_ASPECT_PIXEL_PERFECT:
             case PORT_ASPECT_NATIVE_3_2:
             default:
                 /* "No constraint": stage spans the whole swapchain (see
@@ -819,7 +820,21 @@ extern "C" bool Port_GPU_PresentFrame(const uint32_t* fb, int fb_w, int fb_h, in
         stageX = (w - stageW) / 2;
         stageY = (h - stageH) / 2;
 
-        if (mode == PORT_ASPECT_STRETCH) {
+        int ppMult = 0;
+        if (mode == PORT_ASPECT_PIXEL_PERFECT) {
+            /* Largest whole multiple that fits; see the matching block in
+             * Port_PPU_ComputeViewportRects. 0 = window smaller than one
+             * GBA frame, so fall through to the aspect fit. */
+            ppMult = stageW / FW;
+            const int multV = stageH / FH;
+            if (multV < ppMult) {
+                ppMult = multV;
+            }
+        }
+        if (ppMult >= 1) {
+            frameW = FW * ppMult;
+            frameH = FH * ppMult;
+        } else if (mode == PORT_ASPECT_STRETCH) {
             frameW = stageW;
             frameH = stageH;
         } else if (stageW * FH >= stageH * FW) {
