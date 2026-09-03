@@ -4,6 +4,27 @@
 
 # Project Picori — Minish Cap PC Port
 
+> ### About this fork (`rg35xx-sp-audio-ui`)
+>
+> This is **not** upstream. Upstream is
+> [999sian/tmc](https://github.com/999sian/tmc); this branch adds ~35 commits
+> on top of it and is what builds the aarch64 binary shipped by the
+> [muos-rg35xx-sp-picori](https://github.com/lorencouse/muos-rg35xx-sp-picori)
+> PortMaster package. Tag [`v0.8.3-sp4`](https://github.com/lorencouse/tmc/releases/tag/v0.8.3-sp4)
+> is the shipped build.
+>
+> **It is not actively maintained.** Most of what is here is not
+> device-specific — save states, aspect modes, a settings overlay, an
+> out-of-bounds map-tile crash guard, a TTS shutdown race fix — and would be
+> better off upstream than in a fork. A commit-by-commit triage of what is
+> ready to send upstream, what needs a rebase first, and what is genuinely
+> handheld-only is in the packaging repo's README under
+> [**Taking this over**](https://github.com/lorencouse/muos-rg35xx-sp-picori#taking-this-over).
+>
+> If you want to carry any of it forward: it is GPL-3.0-or-later, and you need
+> nobody's permission. Please send what you can upstream rather than growing
+> another fork.
+
 A native PC port of *The Legend of Zelda: The Minish Cap* (GBA, 2004) built on
 SDL3, a vendored software PPU renderer (`port/ppu`), and the agbplay audio engine.
 Targets **x86-64 Linux, Windows, and macOS** (Apple Silicon and Intel).
