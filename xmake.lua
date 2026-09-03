@@ -966,6 +966,19 @@ target("tmc_pc")
         add_links("m")
     end
 
+    -- POSIX shared memory (port_shm_framebuffer.c: shm_open/shm_unlink).
+    --
+    -- glibc moved these out of librt and into libc proper in 2.34, so a
+    -- build hosted on ubuntu-22.04 (2.35) links them without being asked.
+    -- Against anything older they are still in librt and the link fails
+    -- with "undefined reference to shm_open" -- which is what the
+    -- glibc-2.31 container build found. Asking for -lrt is correct on
+    -- both: on >= 2.34 librt remains as a stub for exactly this reason.
+    -- macOS has them in libSystem and ships no librt.
+    if is_plat("linux") then
+        add_syslinks("rt")
+    end
+
     -- GLES compute rasterizer backend (port_gpu_raster_gl.cpp) needs EGL + GLES
     -- on Linux/Android; it's a no-op stub on Windows/macOS (Vulkan/Metal there).
     if has_config("gpu_renderer") and is_plat("linux", "android") then
