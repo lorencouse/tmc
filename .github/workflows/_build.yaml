@@ -157,6 +157,14 @@ jobs:
           # owned by another uid; without this git refuses to touch it.
           git config --global --add safe.directory '*'
 
+          # xmake hard-refuses to run as root ("extremely dangerous and no
+          # longer supported") and a container job is root by definition.
+          # The alternative is building as an unprivileged user, which
+          # would mean fixing ownership of the checkout, the xmake cache
+          # and the package tree for every later step. Scoped to this job
+          # via GITHUB_ENV, so the hosted-runner legs never see it.
+          echo "XMAKE_ROOT=y" >> "$GITHUB_ENV"
+
       - name: Disable CRLF conversion
         shell: bash
         run: |
@@ -229,15 +237,24 @@ jobs:
           # bullseye-backports carries 0.3.65. Enabling backports pulls only
           # what is explicitly requested from it (default pin priority 100),
           # so the rest of the build stays on bullseye's glibc-2.31 stack.
+          # bullseye is past LTS: main is still served from deb.debian.org
+          # but backports has been retired from it, and archived backports
+          # live in their own tree (debian-backports, not debian). Try each
+          # in turn and carry on without it if none answers -- the audio
+          # gate below is the thing that decides whether that was fatal.
           if [ -f /etc/debian_version ] && grep -q '^11' /etc/debian_version; then
-            echo 'deb http://deb.debian.org/debian bullseye-backports main' \
-              > /etc/apt/sources.list.d/backports.list
-            apt-get update || {
-              echo "::warning::bullseye-backports unavailable — trying the archive"
-              echo 'deb http://archive.debian.org/debian bullseye-backports main' \
-                > /etc/apt/sources.list.d/backports.list
-              apt-get update || rm -f /etc/apt/sources.list.d/backports.list
-            }
+            for bp in 'http://deb.debian.org/debian bullseye-backports' \
+                      'http://archive.debian.org/debian-backports bullseye-backports' \
+                      'http://archive.debian.org/debian bullseye-backports'; do
+              echo "deb $bp main" > /etc/apt/sources.list.d/backports.list
+              if apt-get update 2>/dev/null; then
+                echo "backports: $bp"
+                break
+              fi
+              rm -f /etc/apt/sources.list.d/backports.list
+            done
+            [ -f /etc/apt/sources.list.d/backports.list ] || \
+              echo "::warning::no bullseye-backports mirror answered — pipewire will be the stock 0.3.19"
           fi
           $SUDO apt-get update
           # libasound2-dev / libpulse-dev / libpipewire-0.3-dev: needed
