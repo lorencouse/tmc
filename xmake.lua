@@ -740,6 +740,7 @@ target("tmc_pc")
     add_files("port/generated_sounds_embed.cpp")  -- compile-time sounds.json fallback
     add_files("port/port_ppu.cpp")      -- PPU bridge (C++ → ViruaPPU)
     add_files("port/port_present_thread.cpp") -- off-thread window blit (opt-in)
+    add_files("port/port_m4a_mixdown.c") -- MP2K track mixdown + PCM16 quantise
     add_files("port/port_gpu_renderer.cpp")  -- SDL_GPU presentation (Stage 1: scaffold; gated on --gpu_renderer=y)
     add_files("port/port_gpu_raster.cpp")    -- SDL_GPU PPU rasterizer (docs/gpu-rasterizer-design.md; gated on --gpu_renderer=y)
     add_files("port/port_gpu_obj_cull.c")    -- per-line OBJ candidate cull (shared by GPU raster backends)

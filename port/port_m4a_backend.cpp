@@ -3,6 +3,7 @@
 #include "port_sounds_embed.hpp"
 #include "sound.h"
 #include "port_debug_verbose.h"
+#include "port_m4a_mixdown.h"
 
 #ifdef min
 #undef min
@@ -89,6 +90,9 @@ struct BackendState {
     std::unique_ptr<Rom> rom;
     std::unique_ptr<MP2KContext> ctx;
     std::vector<int16_t> pendingSamples;
+    /* Per-chunk scratch for the mixdown's track list. Cleared, never freed, so
+     * the real-time path allocates only while the track count grows. */
+    std::vector<PortM4AMixTrack> mixTracks;
     size_t pendingFrameOffset = 0;
     std::array<size_t, kSongCount> songHeaderOffsets;
     uint8_t trackVolumes[kPlayerCount][kMaxTracks];
@@ -604,10 +608,17 @@ static void RenderChunkLocked(void) {
         // per sample. Track summation order is preserved, so the float result is
         // bit-identical to the old per-sample loop (pan factor folds to *1.0f when
         // inactive, which is exact in IEEE754).
+        /* Collect the active tracks, then hand the whole mixdown to
+         * PortM4A_Mixdown. Gathering first is what lets it see the track
+         * count up front and pick a strategy: no tracks is a memset, one
+         * track quantises straight from the source with no accumulator round
+         * trip, and only the general case pays for the float scratch. The
+         * old code always wrote 2*sampleCount floats and read them back, even
+         * to produce silence. See port_m4a_mixdown.h. */
         static std::vector<float> accL;
         static std::vector<float> accR;
-        accL.assign(sampleCount, 0.0f);
-        accR.assign(sampleCount, 0.0f);
+
+        sState.mixTracks.clear();
 
         const uint32_t playerCount =
             std::min<uint32_t>(kPlayerCount, static_cast<uint32_t>(sState.ctx->players.size()));
@@ -633,26 +644,35 @@ static void RenderChunkLocked(void) {
                     panR = 1.0f - std::min(-pan, 1.0f);
                 }
 
-                const size_t n = std::min(sampleCount, track.audioBuffer.size());
-                const auto* buf = track.audioBuffer.data();
-                for (size_t sampleIndex = 0; sampleIndex < n; sampleIndex++) {
-                    accL[sampleIndex] += buf[sampleIndex].left * gain * panL;
-                    accR[sampleIndex] += buf[sampleIndex].right * gain * panR;
-                }
+                PortM4AMixTrack mt;
+                /* `struct sample` is { float left; float right; } and is
+                 * standard-layout, so the buffer *is* interleaved L,R floats. */
+                static_assert(sizeof(sample) == 2 * sizeof(float), "sample must be two interleaved floats");
+                mt.samples = reinterpret_cast<const float*>(track.audioBuffer.data());
+                mt.frames = std::min(sampleCount, track.audioBuffer.size());
+                mt.gain = gain;
+                mt.panL = panL;
+                mt.panR = panR;
+                /* x * 1.0f * 1.0f == x exactly, so skipping the multiplies
+                 * here is not an approximation. */
+                mt.unity = (gain == 1.0f && panL == 1.0f && panR == 1.0f) ? 1 : 0;
+                sState.mixTracks.push_back(mt);
             }
         }
 
-        const float masterVolume = sState.masterVolume;
-        for (size_t sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++) {
-            float left = accL[sampleIndex] * masterVolume;
-            float right = accR[sampleIndex] * masterVolume;
-
-            left = std::clamp(left, -1.0f, 1.0f);
-            right = std::clamp(right, -1.0f, 1.0f);
-
-            sState.pendingSamples[sampleIndex * 2 + 0] = static_cast<int16_t>(std::lround(left * 32767.0f));
-            sState.pendingSamples[sampleIndex * 2 + 1] = static_cast<int16_t>(std::lround(right * 32767.0f));
+        float* scratchL = nullptr;
+        float* scratchR = nullptr;
+        if (sState.mixTracks.size() > 1) {
+            if (accL.size() < sampleCount) {
+                accL.resize(sampleCount);
+                accR.resize(sampleCount);
+            }
+            scratchL = accL.data();
+            scratchR = accR.data();
         }
+
+        PortM4A_Mixdown(sState.mixTracks.data(), sState.mixTracks.size(), sampleCount, sState.masterVolume,
+                        scratchL, scratchR, sState.pendingSamples.data());
     } catch (const std::exception& e) {
         AudioGuardWarn("RenderChunkLocked", e.what());
         std::fill(sState.pendingSamples.begin(), sState.pendingSamples.end(), static_cast<int16_t>(0));

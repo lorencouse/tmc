@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Changed
+
+- **The MP2K mixdown no longer pays for passes it does not need.** The
+  per-chunk post-processing — per-track gain/pan, master volume, and the
+  float->PCM16 quantise — always zeroed two float accumulators, summed every
+  track into them, then read them back to quantise. It did that even with no
+  active tracks, which is the most expensive possible way to compute silence.
+
+  It now gathers the active tracks first and picks a strategy from the count:
+  none is a `memset`, one quantises straight from the source with no
+  accumulator round trip, and only the general case allocates float scratch —
+  where the first track *writes* the accumulators instead of adding into
+  zeroed ones, removing both fills. The win is memory traffic, not
+  arithmetic, which is what makes it worth having on a handheld core.
+
+  Adapted from EstebanPdN/zelda-tmc-3ds (GPL-3.0-or-later, same lineage),
+  where a hardware dump put this loop at 32% of one 268 MHz core.
+
+  Bit-identical to the loop it replaces, and proved rather than asserted:
+  `tools/m4a_mixdown_test.c` checks every track-count path against a
+  transcription of the original, and — a case upstream's own test could not
+  catch, since its reference already assumed the new quantiser — checks the
+  new quantiser against the `std::lround` form this tree actually used, across
+  every rounding boundary from -32767 to 32767 (1,572,848 cases) plus the
+  clamp extremes.
+
 ### Added
 
 - **`present_thread`** (`config.json`, default off): blit the window on a
