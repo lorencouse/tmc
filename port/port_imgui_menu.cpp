@@ -1188,8 +1188,9 @@ static void DrawRibbonSavesTab(void) {
             ImGui::SameLine();
             if (Port_QuickSave_HasSlot(s)) {
                 if (ImGui::Button("Load")) {
-                    if (Port_QuickSave_LoadSlot(s))
-                        Port_DebugMenu_ToastFromExternal("Loaded");
+                    const int how = Port_QuickSave_LoadSlot(s);
+                    if (how)
+                        Port_DebugMenu_ToastFromExternal(how == 2 ? "Loaded (room re-entered)" : "Loaded");
                 }
             } else {
                 ImGui::BeginDisabled();

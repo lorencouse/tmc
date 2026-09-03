@@ -20,20 +20,33 @@
  *              hand-made state parked there.
  *
  * File format (disk persistence):
- *   magic    "TMCS"                          (4 bytes)
- *   version  PORT_QUICKSAVE_VERSION          (u32 LE)
- *   total    sum of all region sizes         (u32 LE)
- *   data     concatenated region bytes       (in sRegions[] order)
+ *   magic     "TMCS"                          (4 bytes)
+ *   version   PORT_QUICKSAVE_VERSION          (u32 LE)
+ *   total     sum of all region sizes         (u32 LE)
+ *   saved_at  unix seconds                    (u64 LE)
+ *   session   id of the process that wrote it (u64 LE, see ResumeFromSnapshot)
+ *   region    ROM region tag                  (u32 LE)
+ *   data      concatenated region bytes       (gPortStateRegions[] order)
  *
  * On load, if magic/version/size don't match, the file is rejected
  * silently — the in-memory snapshot (if any) stays untouched. This is
  * defensive against schema changes between builds; saves are best-effort,
  * not a contract.
  *
- * Coverage: emulated GBA memory (EWRAM/IWRAM/VRAM/IO), the save file,
- * the player + state, the room controls + transition, gMain, and the
- * full gEntities array. Anything not in this list (HUD state, OAM, gfx
- * slots, palette buffers) will visually catch up over the next frame.
+ * Coverage: every mutable game global -- emulated GBA memory, the save
+ * file, player, entities *and their list heads/counters*, room/area/map
+ * state, scripts, textbox, menus, fades, palettes. The list lives in
+ * port_linked_stubs.c (gPortStateRegions) next to the definitions; see
+ * port_state_regions.h for what is deliberately left out and why.
+ *
+ * Cross-session loads: the snapshot is full of host pointers (entity links,
+ * script contexts, the text renderer's cursor into an asset buffer), valid
+ * only in the process that wrote them. A state file from an earlier run is
+ * therefore not memcpy'd back; instead its save file is restored and the
+ * engine re-enters the same room at the same position through the path the
+ * game's own continue uses (ResumeFromSnapshot). Inventory, flags, health
+ * and position survive; room state (enemies, cutscene progress) starts
+ * fresh. Within one session loads are exact.
  *
  * Caveats:
  *  - Snapshotting mid-frame is supported but the visible result is
@@ -57,59 +70,21 @@
 #include "save.h"
 #include "main.h"
 #include "entity.h"
+#include "message.h" /* gMessage — save-on-textbox test hook */
+#include "player.h"
 #include "port_gba_mem.h"
 #include "port_runtime_config.h"
 #include "region.h" /* REGION_IS_EU/JP — per-region savestate isolation (#21) */
 #include "virtuappu.h" /* virtuappu_frame_buffer — slot thumbnails */
 
-extern u8 gEwram[];
-extern u8 gIwram[];
-extern u8 gVram[];
-extern u8 gIoMem[];
+#include "port_state_regions.h"
 
-/* The gameplay PRNG seed. On GBA this lived in IWRAM (0x03001150) and was
- * therefore captured by an IWRAM-snapshotting savestate; in the port it is a
- * standalone host global (port_linked_stubs.c), so it must be listed explicitly
- * or QuickLoad would restore everything EXCEPT RNG state and desync manips. */
-extern u32 gRand;
+extern u32 gRand; /* port_linked_stubs.c; restored on a cross-session resume */
 
-/* Speedrun-practice IGT frame counter (port_practice.c). Listed as a region
- * so loading any savestate rewinds the practice timer to the value captured
- * with that state — "reload the section and the timer comes back too". */
-extern u64 gPracticeFrame;
-
-/* Defined in src/player.c — re-resolves the player's .rodata hitbox pointer
-   from the current form after a cross-process quickload (FixupEntityPointers
-   only relocates pointers that land inside gEntities). */
-void Port_RestorePlayerHitbox(void);
-
-typedef struct {
-    void* ptr;
-    size_t size;
-    const char* name;
-} StateRegion;
-
-/* List of regions captured by a save-state. The order doesn't matter for
- * save, but for restore the order must stay consistent with what was on
- * disk — which is why the disk format records the total size and we
- * reject files that don't match the current region layout. */
-static StateRegion sRegions[] = {
-    { gEwram, 0x40000, "gEwram" },
-    { gIwram, 0x8000, "gIwram" },
-    { gVram, 0x18000, "gVram" },
-    { gIoMem, 0x400, "gIoMem" },
-    { &gSave, sizeof(gSave), "gSave" },
-    { &gPlayerEntity, sizeof(gPlayerEntity), "gPlayerEntity" },
-    { &gPlayerState, sizeof(gPlayerState), "gPlayerState" },
-    { &gMain, sizeof(gMain), "gMain" },
-    { &gRoomControls, sizeof(gRoomControls), "gRoomControls" },
-    { &gRoomTransition, sizeof(gRoomTransition), "gRoomTransition" },
-    { gEntities, sizeof(gEntities), "gEntities" },
-    { &gRand, sizeof(gRand), "gRand" },
-    { &gPracticeFrame, sizeof(gPracticeFrame), "gPracticeFrame" },
-};
-
-#define NUM_REGIONS (sizeof(sRegions) / sizeof(sRegions[0]))
+/* The region table is owned by port_linked_stubs.c; these keep the rest of
+ * this file reading the way it always has. */
+#define sRegions gPortStateRegions
+#define NUM_REGIONS gPortStateRegionCount
 /* 20 manual slots. A rolling quick-save is only worth as much as how far
  * back it lets you rewind, and the cost here is small: ~409 KB of state plus
  * a 38 KB thumbnail per slot, so a full set is ~9 MB on a card with tens of
@@ -120,7 +95,7 @@ static StateRegion sRegions[] = {
 #define NUM_SLOTS (NUM_MANUAL_SLOTS + NUM_AUTO_SLOTS)
 #define MAGIC 0x53434D54u /* "TMCS" little-endian */
 #define VERSION                                         \
-    6u /* v2: header carries gEntities base address for \
+    7u /* v2: header carries gEntities base address for \
         * cross-process pointer-fixup on restore.       \
         * v3: gRand added to region list so RNG         \
         * state round-trips (GBA had it in IWRAM).      \
@@ -130,14 +105,18 @@ static StateRegion sRegions[] = {
         * into a JP session contaminates tmc_jp.sav     \
         * (#21); cross-region loads are refused.        \
         * v6: entity subclass layouts changed; older    \
-        * snapshots are rejected. */
+        * snapshots are rejected.                       \
+        * v7: full host-global coverage (list heads,    \
+        * textbox, scripts, ...); the header carries a  \
+        * session id instead of the gEntities base, and \
+        * cross-session loads resume via the engine.    */
 
 typedef struct {
     u8* snapshot; /* heap, NULL if slot empty */
     size_t bytes;
     int valid;
-    u64 saved_at_unix;       /* clock_gettime CLOCK_REALTIME seconds */
-    u64 saved_entities_base; /* gEntities address at save time; 0 for in-RAM slots */
+    u64 saved_at_unix;  /* clock_gettime CLOCK_REALTIME seconds */
+    u64 saved_session; /* process that wrote it; 0 = this one (in-RAM slot) */
 } Slot;
 
 /* Slot thumbnails. A save-state picker is unusable without them -- five
@@ -222,6 +201,7 @@ static int Snapshot_Capture(Slot* s) {
     }
     s->valid = 1;
     s->saved_at_unix = (u64)time(NULL);
+    s->saved_session = 0; /* ours: an exact restore is safe */
     return 1;
 }
 
@@ -256,80 +236,70 @@ static int Snapshot_MatchesCurrent(const Slot* s, const char** region, size_t* o
     return 1;
 }
 
-/* When a slot was written by a previous process, every pointer captured
- * inside gEntities (prev/next/child/parent and any subclass-specific
- * Entity* fields) refers to the old ASLR base. Walk the restored bytes
- * 8-aligned and rewrite anything that falls in [saved_base, saved_base +
- * sizeof(gEntities)) to the corresponding offset under the new base.
- *
- * This is a heuristic — it can rewrite false positives if some non-
- * pointer field happens to hold a value in the saved range. In practice
- * the saved range is small (~5 MB) and that's vanishingly unlikely; the
- * alternative (parsing every Entity subclass to know which fields are
- * pointers) is unmaintainable. Misses the entity-list heads too —
- * those live in gEntityLists which isn't a saved region. */
-static void FixupEntityPointers(u64 saved_base) {
-    if (saved_base == 0)
-        return;
-    const uintptr_t cur_base = (uintptr_t)gEntities;
-    if ((uintptr_t)saved_base == cur_base)
-        return; /* same address, no-op */
-    const uintptr_t saved_lo = (uintptr_t)saved_base;
-    const uintptr_t saved_hi = saved_lo + sizeof(gEntities);
-    const intptr_t delta = (intptr_t)cur_base - (intptr_t)saved_lo;
-    uintptr_t* p = (uintptr_t*)gEntities;
-    /* Whole-array word scan: total bytes / word size, NOT entity count.
-     * The parens silence -Wsizeof-array-div, which mistakes this for an
-     * element-count division (element type is GenericEntity, not uintptr_t). */
-    const size_t n = sizeof(gEntities) / (sizeof(uintptr_t));
-    size_t fixed = 0;
-    for (size_t i = 0; i < n; ++i) {
-        if (p[i] >= saved_lo && p[i] < saved_hi) {
-            p[i] = (uintptr_t)((intptr_t)p[i] + delta);
-            ++fixed;
-        }
+/* Identity of this process, written into every state file so a load can tell
+ * "written by me" (exact restore is safe) from "written by an earlier run"
+ * (pointers are stale; resume through the engine instead). */
+static u64 SessionId(void) {
+    static u64 id = 0;
+    if (id == 0) {
+        id = ((u64)time(NULL) << 32) ^ SDL_GetPerformanceCounter() ^ (u64)(uintptr_t)&id;
+        if (id == 0)
+            id = 1;
     }
-    fprintf(stderr,
-            "[quicksave] pointer-fixup: %zu pointers shifted by %p "
-            "(saved base %p → current %p)\n",
-            fixed, (void*)delta, (void*)saved_lo, (void*)cur_base);
+    return id;
 }
 
+/* Pointer to one region's bytes inside a snapshot, by name. */
+static const u8* SnapshotRegion(const Slot* s, const char* name) {
+    const u8* p = s->snapshot;
+    for (size_t i = 0; i < NUM_REGIONS; i++) {
+        if (strcmp(sRegions[i].name, name) == 0)
+            return p;
+        p += sRegions[i].size;
+    }
+    return NULL;
+}
+
+/* A state written by an earlier process. Its entity, script and text state
+ * is full of pointers into that process's heap, so instead of copying it
+ * back we take what is pointer-free and durable -- the save file -- and
+ * re-enter the room where the state was taken, at the same spot, the way
+ * the game's own continue does (sub_08053250 + SetTask(TASK_GAME)). */
+static int ResumeFromSnapshot(const Slot* s) {
+    const SaveFile* save = (const SaveFile*)SnapshotRegion(s, "gSave");
+    const RoomControls* rc = (const RoomControls*)SnapshotRegion(s, "gRoomControls");
+    const PlayerEntity* pl = (const PlayerEntity*)SnapshotRegion(s, "gPlayerEntity");
+    const u32* rnd = (const u32*)SnapshotRegion(s, "gRand");
+    if (save == NULL || rc == NULL || pl == NULL)
+        return 0;
+    memcpy(&gSave, save, sizeof(gSave));
+    if (rnd != NULL)
+        gRand = *rnd;
+    gRoomTransition.player_status.spawn_type = PL_SPAWN_DEFAULT;
+    gRoomTransition.player_status.start_pos_x = (s16)(pl->base.x.HALF.HI - rc->origin_x);
+    gRoomTransition.player_status.start_pos_y = (s16)(pl->base.y.HALF.HI - rc->origin_y);
+    gRoomTransition.player_status.start_anim = pl->base.animationState;
+    gRoomTransition.player_status.layer = pl->base.collisionLayer;
+    gRoomTransition.player_status.area_next = rc->area;
+    gRoomTransition.player_status.room_next = rc->room;
+    memcpy(&gSave.saved_status, &gRoomTransition.player_status, sizeof(gRoomTransition.player_status));
+    SetTask(TASK_GAME);
+    fprintf(stderr, "[quicksave] state is from an earlier session: resuming area=%u room=%u at (%d,%d) via the engine\n",
+            rc->area, rc->room, pl->base.x.HALF.HI, pl->base.y.HALF.HI);
+    return 2;
+}
+
+/* Returns 1 for an exact restore, 2 for a cross-session resume, 0 on failure. */
 static int Snapshot_Restore(const Slot* s) {
     if (!s->valid || s->snapshot == NULL || s->bytes != TotalRegionBytes()) {
         return 0;
     }
+    if (s->saved_session != 0 && s->saved_session != SessionId())
+        return ResumeFromSnapshot(s);
     const u8* src = s->snapshot;
     for (size_t i = 0; i < NUM_REGIONS; i++) {
         memcpy(sRegions[i].ptr, src, sRegions[i].size);
         src += sRegions[i].size;
-    }
-    /* gEntities was just overwritten; fix any pointer fields that
-     * point to the saved process's gEntities range. Safe no-op when
-     * the slot was made in this process (same base). */
-    FixupEntityPointers(s->saved_entities_base);
-
-    /* Cross-process restore only: pointers that target fixed globals / .rodata
-     * (not gEntities) are NOT relocated by FixupEntityPointers and are left
-     * pointing into the previous process's address space. Re-establish the two
-     * that are dereferenced unguarded every frame after a load:
-     *   - gRoomControls.camera_target — room restore paths deref it while
-     *     rebuilding scroll. After fixup a usable target is an entity now inside
-     *     the relocated gEntities range; NULL and non-NULL pointers outside
-     *     gEntities both leave the restore path without a safe target, so point
-     *     them at the live player.
-     *   - gPlayerEntity.base.hitbox — a stale .rodata pointer; the player tile-
-     *     probe / interactable scan deref it without the IsColliding guard.
-     * In-process F5/F6 keeps the same base (FixupEntityPointers no-ops), so
-     * these are skipped there to leave the fast path untouched. */
-    if (s->saved_entities_base != 0 && (uintptr_t)s->saved_entities_base != (uintptr_t)gEntities) {
-        uintptr_t ct = (uintptr_t)gRoomControls.camera_target;
-        uintptr_t lo = (uintptr_t)gEntities;
-        uintptr_t hi = lo + sizeof(gEntities);
-        if (ct == 0 || ct < lo || ct >= hi) {
-            gRoomControls.camera_target = (Entity*)&gPlayerEntity;
-        }
-        Port_RestorePlayerHitbox();
     }
     return 1;
 }
@@ -532,18 +502,15 @@ static int WriteSlotToDisk(int slot) {
     const u32 version = VERSION;
     const u32 total = (u32)s->bytes;
     const u64 saved_at = s->saved_at_unix;
-    /* gEntities base — needed to fix up internal pointers when the
-     * file is loaded by a later process (different ASLR base). The
-     * captured bytes still contain prev/next/child/parent pointers
-     * into the old process's gEntities[]; without fixup, restoring
-     * them and running the entity-update loop dereferences unmapped
-     * memory. */
-    const u64 entities_base = (u64)(uintptr_t)gEntities;
+    /* Executable image range at save time. A later process loads at a
+     * different ASLR base, and every host pointer in the snapshot (entity
+     * links, list heads, script contexts, .rodata hitboxes) must be shifted
+     * by the difference -- see RelocatePointers. */
+    const u64 session = SessionId();
     const u32 region_tag = ActiveRegionTag();
     if (fwrite(&magic, sizeof(magic), 1, f) != 1 || fwrite(&version, sizeof(version), 1, f) != 1 ||
         fwrite(&total, sizeof(total), 1, f) != 1 || fwrite(&saved_at, sizeof(saved_at), 1, f) != 1 ||
-        fwrite(&entities_base, sizeof(entities_base), 1, f) != 1 ||
-        fwrite(&region_tag, sizeof(region_tag), 1, f) != 1) {
+        fwrite(&session, sizeof(session), 1, f) != 1 || fwrite(&region_tag, sizeof(region_tag), 1, f) != 1) {
         fprintf(stderr, "[quicksave] header write failed for %s\n", path);
         fclose(f);
         return 0;
@@ -575,7 +542,8 @@ static int ReadSlotFromDisk(int slot) {
         return 0;
     u32 magic = 0, version = 0, total = 0;
     u64 saved_at = 0;
-    u64 saved_entities_base = 0;
+    u64 session = 0;
+    Slot* s = &sSlots[slot];
     if (!ReadSlotHeader(f, &magic, &version, &total, &saved_at)) {
         fprintf(stderr, "[quicksave] short read on %s header, ignoring slot file\n", path);
         fclose(f);
@@ -585,8 +553,8 @@ static int ReadSlotFromDisk(int slot) {
         fclose(f);
         return 0;
     }
-    if (fread(&saved_entities_base, sizeof(saved_entities_base), 1, f) != 1) {
-        fprintf(stderr, "[quicksave] short read on %s entity-base header, ignoring slot file\n", path);
+    if (fread(&session, sizeof(session), 1, f) != 1) {
+        fprintf(stderr, "[quicksave] short read on %s session header, ignoring slot file\n", path);
         fclose(f);
         return 0;
     }
@@ -604,7 +572,6 @@ static int ReadSlotFromDisk(int slot) {
             return 0;
         }
     }
-    Slot* s = &sSlots[slot];
     if (s->snapshot == NULL || s->bytes != total) {
         free(s->snapshot);
         s->snapshot = (u8*)malloc(total);
@@ -625,7 +592,7 @@ static int ReadSlotFromDisk(int slot) {
     }
     s->valid = 1;
     s->saved_at_unix = saved_at;
-    s->saved_entities_base = saved_entities_base;
+    s->saved_session = session;
     return 1;
 }
 
@@ -668,18 +635,19 @@ int Port_QuickSave_LoadSlot(int slot) {
             return 0;
         }
     }
-    if (!Snapshot_Restore(&sSlots[slot])) {
+    const int how = Snapshot_Restore(&sSlots[slot]);
+    if (how == 0) {
         fprintf(stderr, "[quicksave] slot %d restore failed\n", slot);
         return 0;
     }
-    fprintf(stderr, "[quicksave] slot %d restored\n", slot);
+    fprintf(stderr, "[quicksave] slot %d %s\n", slot, how == 2 ? "resumed (room re-entered)" : "restored");
     {
         /* Tell the Reborn-parity layer a resume just happened so it
          * can swallow the next queued Ezlo hint (if that toggle is on). */
         extern void Port_Reborn_NotifyJustResumed(void);
         Port_Reborn_NotifyJustResumed();
     }
-    return 1;
+    return how; /* 1 exact, 2 resumed -- callers word the toast accordingly */
 }
 
 /* Reads the on-disk header once per slot and caches existence + timestamp. */
@@ -695,10 +663,14 @@ static void ProbeSlotOnDisk(int slot) {
     FILE* f = fopen(path, "rb");
     if (!f)
         return;
-    sDiskExists[slot] = 1;
     u32 magic = 0, version = 0, total = 0;
     u64 saved_at = 0;
-    if (ReadSlotHeader(f, &magic, &version, &total, &saved_at)) {
+    /* A file from an older build (different version or region layout) would
+     * be refused by ReadSlotFromDisk, so present it as empty rather than as a
+     * slot whose Load button silently does nothing. */
+    if (ReadSlotHeader(f, &magic, &version, &total, &saved_at) && magic == MAGIC && version == VERSION &&
+        total == (u32)TotalRegionBytes()) {
+        sDiskExists[slot] = 1;
         sDiskSavedAt[slot] = saved_at;
     }
     fclose(f);
@@ -718,8 +690,8 @@ int Port_QuickSave_HasSlot(int slot) {
 /* ---- Practice point -------------------------------------------------- *
  * A dedicated in-memory snapshot for the speedrun practice mode, kept
  * separate from the F1..F5 user slots so practising a segment never clobbers
- * a manual save. In-process only (no disk, no pointer fixup needed — the
- * entities base is unchanged within a run), so set/reload is a sub-ms memcpy.
+ * a manual save. In-process only (no disk, no pointer relocation needed
+ * within one run), so set/reload is a sub-ms memcpy.
  * Driven from port_practice.c via the Port_Practice_SetPoint/LoadPoint API. */
 static Slot sPracticeSlot;
 
@@ -788,7 +760,71 @@ static void TakeAutoSnapshot(const char* reason) {
     }
 }
 
+/* Headless cross-process save-state check, two halves run as two processes:
+ *
+ *   TMC_REPRO_SAVE_SLOT_ON_MSG=N  the first frame a textbox is open while the
+ *                                 player has no control (cutscene dialogue,
+ *                                 area-name banner), save slot N and exit.
+ *                                 That is the moment a snapshot with partial
+ *                                 coverage strands the player.
+ *   TMC_REPRO_LOAD_SLOT=N         once gameplay is reached, load slot N (left
+ *                                 on disk by the first process), then report
+ *                                 position and control mode every second. A
+ *                                 good load shows ctrl returning to 0 and,
+ *                                 with the harness's TMC_REPRO_MASH_A=1 and
+ *                                 TMC_REPRO_HOLD_DIR=l, the player moving.
+ *
+ * Both need TMC_AUTOPLAY=1 and rely on port_repro_npc_talk.c to bootstrap
+ * into a room (TMC_REPRO_NPC_TALK=1 for the first, automatic for the second).
+ * Input has to be forced from that harness, not from here: this runs after
+ * Port_UpdateInput() has already sampled the frame. */
+static void ReproLoadSlotTick(void) {
+    static int pending = -2;
+    static int saveOnMsg = -1;
+    static unsigned int frames = 0;
+    static int reports = 0;
+    if (pending == -2) {
+        const char* env = getenv("TMC_REPRO_LOAD_SLOT");
+        pending = (env != NULL && env[0] != '\0') ? atoi(env) : -1;
+        env = getenv("TMC_REPRO_SAVE_SLOT_ON_MSG");
+        saveOnMsg = (env != NULL && env[0] != '\0') ? atoi(env) : -1;
+    }
+    if (gMain.task != TASK_GAME)
+        return;
+    if (saveOnMsg >= 0 && (gMessage.state & 0x7f) != 0 && gPlayerState.controlMode != CONTROL_ENABLED) {
+        fprintf(stderr, "[quicksave-test] textbox open with ctrl=%d at x=%d y=%d area=%u room=%u -- saving slot %d\n",
+                gPlayerState.controlMode, gPlayerEntity.base.x.HALF.HI, gPlayerEntity.base.y.HALF.HI,
+                gRoomControls.area, gRoomControls.room, saveOnMsg);
+        const int ok = Port_QuickSave_SaveSlot(saveOnMsg);
+        fprintf(stderr, "[quicksave-test] %s\n", ok ? "saved; exiting" : "FAIL: save failed");
+        fflush(stderr);
+        _Exit(ok ? 0 : 1);
+    }
+    if (pending == -1)
+        return;
+    frames++;
+    if (pending >= 0) {
+        if (frames < 60)
+            return;
+        fprintf(stderr, "[quicksave-test] before load: player x=%d y=%d ctrl=%d\n", gPlayerEntity.base.x.HALF.HI,
+                gPlayerEntity.base.y.HALF.HI, gPlayerState.controlMode);
+        fprintf(stderr, "[quicksave-test] loading slot %d\n", pending);
+        if (!Port_QuickSave_LoadSlot(pending))
+            fprintf(stderr, "[quicksave-test] FAIL: slot %d did not load\n", pending);
+        pending = -3; /* loaded; now just report */
+        frames = 0;
+        return;
+    }
+    if (frames % 60 == 0 && reports < 120) {
+        reports++;
+        fprintf(stderr, "[quicksave-test] t+%us: player x=%d y=%d ctrl=%d area=%u room=%u\n", frames / 60,
+                gPlayerEntity.base.x.HALF.HI, gPlayerEntity.base.y.HALF.HI, gPlayerState.controlMode,
+                gRoomControls.area, gRoomControls.room);
+    }
+}
+
 void Port_QuickSave_AutoTick(void) {
+    ReproLoadSlotTick();
     if (QuickSaveReplayTestTick() || !sAutoEnabled)
         return;
     const u64 now = SDL_GetTicks();

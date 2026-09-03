@@ -2349,3 +2349,147 @@ u32 CheckRectOnScreen(s32 x, s32 y, u32 halfW, u32 halfH) {
         return 0;
     return 1;
 }
+
+/* ============================================================
+ *   Save-state region table (see port_state_regions.h)
+ * ============================================================
+ *
+ * Everything mutable that the game reads back across frames. Deliberately
+ * left out:
+ *   - ROM-derived tables filled once at start-up and never written again
+ *     (gMapData, gFrameObjLists, gCollisionMtx, gSpritePtrs, gArea* tables,
+ *     gFixedTypeGfxData, gTranslations, ...) — identical in every session.
+ *   - gInput: re-read from the host every frame.
+ *   - Sound engine state (gSoundPlayingInfo, gPortSoundInfoPtr): owned by the
+ *     port's audio backend, which is not rewound.
+ *   - gUpdateContext: per-frame scratch holding a stack pointer.
+ *   - Port bookkeeping (gPortIntr*, address constants such as
+ *     gUnk_02036A58_storage).
+ *
+ * R()  = a complete object, sized by the compiler.
+ * RS() = incomplete array type, size given explicitly. */
+#include "port_state_regions.h"
+#include "port_practice.h" /* gPracticeFrame */
+
+#define R(sym) { &(sym), sizeof(sym), #sym },
+#define RS(sym, sz) { (sym), (sz), #sym },
+
+const PortStateRegion gPortStateRegions[] = {
+    /* Emulated GBA memory. */
+    RS(gEwram, 0x40000)
+    RS(gIwram, 0x8000)
+    RS(gVram, 0x18000)
+    RS(gIoMem, 0x400)
+
+    /* Save file, player, main loop. */
+    R(gSave)
+    R(gPlayerEntity)
+    R(gPlayerState)
+    R(gPlayerClones)
+    R(gPlayerScriptExecutionContext)
+    R(gAuxPlayerEntities)
+    R(gMain)
+    R(gRand)
+    R(gPracticeFrame)
+
+    /* Entities and the lists that thread them together. */
+    R(gEntities)
+    R(gEntityLists)
+    R(gEntityListsBackup)
+    R(gEntCount)
+    R(gManagerCount)
+    R(gEntityScriptCtxTable)
+    R(gCarriedEntity)
+    R(gActiveItems)
+    R(gPriorityHandler)
+    R(gPossibleInteraction)
+    R(gCollidableCount)
+    R(gCollidableList)
+    R(gInteractableObjects)
+
+    /* Room, area, map. */
+    R(gRoomControls)
+    R(gRoomTransition)
+    R(gRoomVars)
+    R(gRoomMemory)
+    R(gCurrentRoomMemory)
+    R(gCurrentRoomProperties)
+    R(gArea)
+    R(gMapBottom)
+    R(gMapTop)
+    R(gMapDataBottomSpecial)
+    R(gMapDataTopSpecial)
+    R(gDungeonMap)
+    R(gFuseInfo)
+    R(gSmallChests)
+    R(gTilesForSpecialTiles)
+    R(gNPCData)
+    R(gBgAnimations)
+    R(gDiggingCaveEntranceTransition)
+
+    /* Scripts. */
+    R(gActiveScriptInfo)
+    R(gScriptExecutionContextArray)
+
+    /* Text, menus, UI, fades. */
+    R(gMessage)
+    R(gTextRender)
+    R(gTextGfxBuffer)
+    R(gUI)
+    R(gHUD)
+    R(_gMenuSharedStorage)
+    R(gPauseMenuOptions)
+    R(gFadeControl)
+
+    /* Display plumbing that VRAM alone does not carry. */
+    R(gScreen)
+    R(gOamCmd)
+    R(gOAMControls)
+    R(gVBlankDMA)
+    R(gUpdateVisibleTiles)
+    R(gGFXSlots)
+    R(gPaletteBuffer)
+    R(gPaletteBufferBackup)
+    R(gPaletteList)
+    R(gUsedPalettes)
+
+    /* Named-by-address EWRAM/IWRAM residents. */
+    R(gUnk_02000010)
+    R(gUnk_02000020)
+    R(gUnk_02000030)
+    R(gUnk_02000040)
+    R(gUnk_020000B0)
+    R(gUnk_020000C0)
+    R(gUnk_02001A3C)
+    R(gUnk_02006F00)
+    R(gUnk_0200B640)
+    R(gUnk_02017830)
+    R(gUnk_02017AA0)
+    R(gUnk_02017BA0)
+    R(gUnk_02018EA0)
+    R(gUnk_02018EB0)
+    R(gUnk_02018EE0)
+    R(gUnk_02021F00)
+    R(gUnk_020227DC)
+    R(gUnk_020227E8)
+    R(gUnk_020227F0)
+    R(gUnk_020227F8)
+    R(gUnk_02022800)
+    R(gUnk_02022830)
+    R(gUnk_02024048)
+    R(gUnk_020246B0)
+    R(gUnk_020342F8)
+    R(gUnk_02034480)
+    R(gUnk_02034492)
+    R(gUnk_020344A0)
+    R(gUnk_020354C0)
+    R(gzHeap)
+    R(gUnk_03000420)
+    R(gUnk_03000C30)
+    R(gUnk_03001020)
+};
+
+const size_t gPortStateRegionCount = sizeof(gPortStateRegions) / sizeof(gPortStateRegions[0]);
+
+#undef R
+#undef RS

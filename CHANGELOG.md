@@ -39,6 +39,38 @@
   release is deliberately not gated on the menu being closed, so opening the
   menu mid-hold cannot leave it stuck on.
 
+### Fixed
+
+- **Loading a save state mid-game could strand the player off-screen with
+  controls dead.** The snapshot covered the four GBA memory arrays and a
+  hand-picked few structs, but this port moved nearly all of the GBA's RAM
+  residents into host globals — the entity list heads, entity counters, the
+  textbox system, area/room variables, fade, priority handler and script
+  contexts were all outside it. A load restored the entity *bodies* from one
+  moment and left the bookkeeping from another; a state taken while a manager
+  had disabled the player's controls came back with no manager to re-enable
+  them. The region table now lives next to the globals themselves
+  (`gPortStateRegions` in `port_linked_stubs.c`, 97 regions, ~650 KB) and
+  covers every mutable game global. Verified with the headless
+  `TMC_REPRO_QUICKSAVE_ROUNDTRIP` gate: a 900-frame replay after restore is
+  byte-identical across all regions. State format bumped to v7; older state
+  files show as empty slots rather than as slots whose Load button does
+  nothing.
+- **Loading a state from an earlier session no longer crashes or corrupts an
+  entity list.** The snapshot is full of host pointers — entity links, script
+  contexts, the text renderer's cursor into an asset buffer — valid only in
+  the process that wrote them; the old base-delta fix-up missed most of them
+  and left `stale entity pointer … bailing out` firing every frame. Each state
+  now carries the writing process's session id. A state from the same session
+  restores exactly as before; one from an earlier session restores the save
+  file and re-enters the same room at the same position through the path the
+  game's own continue uses. Inventory, flags, health and position survive;
+  room state (enemies, cutscene progress) starts fresh, and the toast says so
+  ("room re-entered"). Two headless hooks reproduce the round trip —
+  `TMC_REPRO_SAVE_SLOT_ON_MSG=N` saves the moment a textbox opens with
+  controls disabled, `TMC_REPRO_LOAD_SLOT=N` loads it in a fresh process and
+  logs position and control mode each second.
+
 ## v0.8.3 (2026-07-19)
 
 ### Fixed

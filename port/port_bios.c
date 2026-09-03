@@ -311,7 +311,11 @@ static void Port_PumpEvents(void) {
                 } else {
                     const int slot = Port_QuickSave_SelectedSlot();
                     const int ok = Port_QuickSave_LoadSelected();
-                    snprintf(msg, sizeof(msg), ok ? "Loaded slot %d" : "Slot %d is empty", slot + 1);
+                    /* 2 = the state came from an earlier session and the
+                     * room was re-entered rather than restored byte-for-byte. */
+                    snprintf(msg, sizeof(msg),
+                             ok == 2 ? "Loaded slot %d (room re-entered)" : ok ? "Loaded slot %d" : "Slot %d is empty",
+                             slot + 1);
                 }
                 Port_DebugMenu_ToastFromExternal(msg);
                 continue;

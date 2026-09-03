@@ -84,6 +84,9 @@ void Port_ReproNpcTalk_Tick(unsigned int frame) {
         const char* env = getenv("TMC_REPRO_NPC_TALK");
         const char* roundtrip = getenv("TMC_REPRO_QUICKSAVE_ROUNDTRIP");
         bootstrap_only = roundtrip && *roundtrip && strcmp(roundtrip, "0") != 0;
+        /* The cross-process save-state check (port_quicksave.c) also wants a
+         * room to load into, but none of the talk behaviour. */
+        bootstrap_only = bootstrap_only || getenv("TMC_REPRO_LOAD_SLOT") != NULL;
         active = (env && *env && strcmp(env, "0") != 0) || bootstrap_only;
         if (!active) {
             FILE* marker = fopen("repro_npc_talk", "rb");
@@ -113,7 +116,7 @@ void Port_ReproNpcTalk_Tick(unsigned int frame) {
     if (!active)
         return;
 
-    if (mash_a && warped && frame % 40 < 2) {
+    if (mash_a && (warped || (bootstrap_only && booted)) && frame % 40 < 2) {
         Port_Config_TestForceEdge(PORT_INPUT_A);
         if (getenv("TMC_REPRO_MASH_B")) /* ponytail: debug knob — sword mash for boss-fight repros */
             Port_Config_TestForceEdge(PORT_INPUT_B);

@@ -176,6 +176,13 @@ back to the first once all twenty are filled, so repeated presses leave a
 rolling history rather than overwriting one state. The selection persists in
 `config.json` (`savestate_slot`).
 
+Within one session a load is exact. A state file written by an **earlier**
+session restores the save file and re-enters the same room at the same
+position via the game's own continue path instead — the snapshot holds host
+pointers that are only valid in the process that wrote them — so inventory,
+flags, health and position carry over while room state starts fresh; the toast
+reads "room re-entered".
+
 **F8 → Saves** is a picker, not just a list: every slot shows a preview
 thumbnail of the moment it was taken alongside its timestamp. Twenty identical
 dates say nothing about which state is the one you want.
