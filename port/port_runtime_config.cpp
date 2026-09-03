@@ -77,7 +77,7 @@ u8 sInternalScale = 1;
 int sFastForwardFps = 60;
 /* Re-seat the tick grid on each vsync-blocked present when the display refresh
  * equals the tick rate (see the decoupled pacer in port_bios.c). */
-bool sVsyncLockTicks = true;
+bool sVsyncLockTicks = false; /* opt-in: right only when the present really blocks on a refresh at the tick rate */
 std::string sUpscaleMethod = "nearest";
 u64 sFrameTimeNs = 1000000000ULL / 60; /* 60 FPS cap by default (VSync-effective); see kDefaultFrameTimeNs */
 bool sPortSettingsMenuEnabled = true;
@@ -274,7 +274,7 @@ const BoolCfg kBoolCfg[] = {
 #endif
     { "console_parity", &sConsoleParity, false },
     { "decouple_render", &sDecoupleRender, true },
-    { "vsync_lock_ticks", &sVsyncLockTicks, true },
+    { "vsync_lock_ticks", &sVsyncLockTicks, false },
     { "show_fps", &sShowFps, false },
     { "tts_enabled", &sTtsEnabled, true },
     { "a11y_cues", &sA11yCues, true },

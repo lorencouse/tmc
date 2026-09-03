@@ -811,7 +811,23 @@ void VBlankIntrWait(void) {
          * Unknown refresh (headless/dummy) keeps the old 60 Hz assumption. */
         unsigned refresh = Port_PPU_DisplayRefreshRate();
         u32 vsyncCeiling = refresh > 0 ? (u32)refresh : 60;
-        bool mustDisable = sFastForward || targetFps == 0 || targetFps > vsyncCeiling;
+        /* A reported 59 Hz against a 60 fps target is the same display (SDL
+         * rounds 59.94 down); only a target clearly above the refresh is the
+         * case VSync must yield to. */
+        /* TMC_REPRO_FASTFORWARD_AT=<tick>: harness knob -- hold fast-forward from
+         * this tick on, as if the bound key were held. Lets a headless or
+         * device run measure fast-forward speed without an input path. */
+        {
+            static long ffAt = -2;
+            static u32 ffTicks = 0;
+            if (ffAt == -2) {
+                const char* e = getenv("TMC_REPRO_FASTFORWARD_AT");
+                ffAt = (e && *e) ? atol(e) : -1;
+            }
+            if (ffAt >= 0 && ++ffTicks > (u32)ffAt)
+                sFastForward = true;
+        }
+        bool mustDisable = sFastForward || targetFps == 0 || targetFps > vsyncCeiling + 1;
         /* TMC_PACE_VSYNC_OFF_AFTER=<ticks>: pacing experiment -- start with the
          * configured VSync, then switch it off for good after this many ticks.
          * On the RG35XX SP a software renderer created with VSync off presents
