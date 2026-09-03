@@ -110,6 +110,25 @@ static void DrawRibbonDisplayTab(void) {
                    [](char*, size_t) { return Port_Config_AspectModeName(Port_Config_AspectMode()); },
                    Port_Config_CycleAspectMode);
 
+        /* Which settings shell the F8 menu draws. Auto picks the console
+         * one on a narrow window (a handheld panel); a desktop user who
+         * prefers the simplified list, or a handheld with a wide-enough
+         * screen, can pin it either way. */
+        StepperRow("Menu style", "consoleui",
+                   [](char* b, size_t n) -> const char* {
+                       const int m = Port_Config_GetConsoleUiMode();
+                       std::snprintf(b, n, "%s", m == PORT_CONSOLE_UI_ON      ? "console"
+                                                 : m == PORT_CONSOLE_UI_OFF   ? "desktop"
+                                                                              : "auto");
+                       return b;
+                   },
+                   Port_Config_CycleConsoleUiMode);
+        RandoUi_HelpTooltip(
+            "'console' is the simplified one-group-at-a-time menu built for "
+            "handhelds: D-pad to move, A to select, B to go back, L/R to "
+            "change group. 'desktop' is the wide tabbed ribbon. 'auto' picks "
+            "console whenever the window is too narrow for the ribbon.");
+
         StepperRow("Renderer", "renderer",
                    [](char*, size_t) { return Port_Config_RenderBackendName(Port_Config_RenderBackend()); },
                    Port_Config_CycleRenderBackend);

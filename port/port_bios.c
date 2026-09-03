@@ -272,6 +272,17 @@ static void Port_PumpEvents(void) {
             continue;
         }
 
+        /* Settings menu open: the player's own A / B / D-pad / L / R drive it.
+         * Without this the menu is reachable only with Enter / Escape / arrow
+         * keys, which a handheld cannot send -- on the RG35XX SP the pad
+         * arrives as a virtual keyboard whose face buttons are 'x' and 'z',
+         * so every menu row was unreachable once the menu was open. The hook
+         * consumes what it matches so the same press can't also fall through
+         * to the classic menu's key handling below. */
+        if (Port_DebugMenu_IsOpen() && Port_ImGui_HandleGameInputEvent(&e)) {
+            continue;
+        }
+
         /* Rebindable save-state hotkeys. These live outside the KEY_DOWN
          * block below because they are the only hotkeys that must also work
          * from a gamepad button -- on a handheld there is no keyboard to

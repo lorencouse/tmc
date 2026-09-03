@@ -93,10 +93,16 @@ void Port_DebugMenu_PageActivate(int depth, int idx);   /* Enter on item */
 void Port_DebugMenu_PageCycleLeft(int depth, int idx);  /* Left arrow */
 void Port_DebugMenu_PageCycleRight(int depth, int idx); /* Right arrow */
 const char* Port_DebugMenu_Toast(void);                 /* NULL if expired */
+bool Port_DebugMenu_HandleKey(int sdlKey);              /* classic page-stack input */
 }
 
 static bool sImGuiInited = false;
 static bool sRibbonEnabled = true; /* Office-style ribbon at top */
+/* Console-shell help line: the text for whichever row the D-pad cursor is
+ * sitting on. Fed by RandoUi_HelpTooltip — its (?) tooltip is hover-only,
+ * and a handheld has no pointer to hover with — and drained by the console
+ * footer each frame. */
+static const char* sConsoleHelp = nullptr;
 static SDL_Window* sWindow = nullptr;
 
 /* See the small-display pass in Port_ImGui_Init: one scale factor for
@@ -387,6 +393,127 @@ extern "C" void Port_ImGui_HandleEvent(const SDL_Event* event) {
         io.AddMouseWheelEvent(0.0f, dyPx / 67.0f);
     }
 #endif
+}
+
+/* ------------------------------------------------------------------ */
+/*   Console / handheld shell                                          */
+/* ------------------------------------------------------------------ */
+/* The desktop shell is a 15-tab ribbon full of mouse affordances
+ * (double-click to activate, right-click to cycle, hover tooltips, a
+ * corner close button). None of that exists on a handheld: an RG35XX SP
+ * is 640x480 with no pointer, and the ribbon's tab strip alone overflows
+ * the panel. Console mode swaps it for a one-category-at-a-time shell
+ * driven entirely by the D-pad and A/B — see DrawConsoleMenu below. */
+extern "C" bool Port_ImGui_ConsoleMode(void) {
+    /* Session override first so a device can be tested both ways without
+     * editing config.json. */
+    static int sEnv = -1;
+    if (sEnv < 0) {
+        const char* e = getenv("TMC_CONSOLE_UI");
+        sEnv = (e && *e) ? (atoi(e) != 0 ? 1 : 0) : 2;
+    }
+    if (sEnv != 2)
+        return sEnv == 1;
+
+    const int mode = Port_Config_GetConsoleUiMode();
+    if (mode == PORT_CONSOLE_UI_ON)
+        return true;
+    if (mode == PORT_CONSOLE_UI_OFF)
+        return false;
+
+    /* Auto: the ribbon needs roughly 900px to lay its tab strip out. Re-read
+     * the window each frame — a desktop user can resize, and the answer must
+     * follow — but only once per frame: this is also called per help-tooltip,
+     * which is hundreds of calls on a settings page. */
+    static int sFrame = -1;
+    static bool sAuto = false;
+    const int frame = sImGuiInited ? ImGui::GetFrameCount() : -1;
+    if (frame != sFrame) {
+        sFrame = frame;
+        int w = 0, h = 0;
+        if (sUiScaleWindow)
+            SDL_GetWindowSize(sUiScaleWindow, &w, &h);
+        sAuto = (w > 0 && w <= 860);
+    }
+    return sAuto;
+}
+
+/* Route the player's own bound buttons into the settings menu.
+ *
+ * A muOS/PortMaster handheld has no gamepad SDL can see: weston's libinput
+ * refuses muOS-Keys, so gptokeyb hands the pad over as a virtual *keyboard*
+ * (A arrives as 'x', B as 'z' — see the port's tmc_pc.gptk). ImGui's own
+ * gamepad nav therefore never fires, and before this the menu could only be
+ * driven with Enter / Escape / arrows — keys such a device cannot send from
+ * its face buttons at all. Translating the config's A / B / D-pad / L / R
+ * binds into ImGuiKey_Gamepad* makes every widget already in the menu answer
+ * to A and B, on any device, without touching the widgets themselves.
+ *
+ * Keyboard events only: when a real pad *is* present the SDL3 backend
+ * already feeds these same nav keys from it, and a second source would let
+ * one path's release cancel the other's held state. */
+static const struct {
+    PortInput input;
+    ImGuiKey nav;
+    int classicKey; /* SDLK_* equivalent for the classic page-stack menu */
+} kConsoleNavMap[] = {
+    { PORT_INPUT_A, ImGuiKey_GamepadFaceDown, SDLK_RETURN },
+    { PORT_INPUT_B, ImGuiKey_GamepadFaceRight, SDLK_ESCAPE },
+    { PORT_INPUT_UP, ImGuiKey_GamepadDpadUp, SDLK_UP },
+    { PORT_INPUT_DOWN, ImGuiKey_GamepadDpadDown, SDLK_DOWN },
+    { PORT_INPUT_LEFT, ImGuiKey_GamepadDpadLeft, SDLK_LEFT },
+    { PORT_INPUT_RIGHT, ImGuiKey_GamepadDpadRight, SDLK_RIGHT },
+    { PORT_INPUT_L, ImGuiKey_GamepadL1, SDLK_PAGEUP },
+    { PORT_INPUT_R, ImGuiKey_GamepadR1, SDLK_PAGEDOWN },
+};
+
+extern "C" bool Port_ImGui_HandleGameInputEvent(const SDL_Event* event) {
+    if (!sImGuiInited || !event)
+        return false;
+    if (event->type != SDL_EVENT_KEY_DOWN && event->type != SDL_EVENT_KEY_UP)
+        return false;
+    /* A seed field owns the keyboard, and a binding capture is *waiting* for
+     * the very button we'd be swallowing. */
+    if (Port_ImGui_WantsTextInput() || Port_Config_IsCapturingBinding())
+        return false;
+
+    /* Repeats carry nothing new: ImGui runs nav auto-repeat off the held
+     * state, and the classic menu's caller already drops them.
+     * Port_Config_EventIsInputDown ignores them too. */
+    const bool down = (event->type == SDL_EVENT_KEY_DOWN);
+
+    /* The classic page-stack menu (ribbon mode off, desktop) is driven by
+     * key codes rather than ImGui nav, so translate into those instead. */
+    const bool classic = !sRibbonEnabled && !Port_ImGui_ConsoleMode();
+
+    bool consumed = false;
+    for (const auto& m : kConsoleNavMap) {
+        const bool match = down ? Port_Config_EventIsInputDown(event, m.input)
+                                : Port_Config_EventIsInputUp(event, m.input);
+        if (!match)
+            continue;
+        consumed = true;
+        if (classic) {
+            if (down)
+                Port_DebugMenu_HandleKey(m.classicKey);
+        } else {
+            ImGui::GetIO().AddKeyEvent(m.nav, down);
+        }
+    }
+    return consumed;
+}
+
+/* Release every nav key we may have pressed. A button held as the menu
+ * closes never delivers its key-up to the hook (it only runs while the menu
+ * is open), which would leave ImGui believing the D-pad is still held and
+ * make the next open scroll away on its own. */
+static void ConsoleReleaseInjectedNav(void) {
+    if (!sImGuiInited)
+        return;
+    ImGuiIO& io = ImGui::GetIO();
+    for (const auto& m : kConsoleNavMap) {
+        io.AddKeyEvent(m.nav, false);
+    }
 }
 
 extern "C" bool Port_ImGui_IsEnabled(void) {
@@ -2124,6 +2251,18 @@ static void RandoUi_SettingDefaultValue(const RandoLogicSetting* s, char* out, s
 }
 
 static void RandoUi_HelpTooltip(const char* text) {
+    /* Console shell: there is no pointer to hover the (?) with, so the help
+     * goes to the footer whenever nav focus is on the row it annotates. The
+     * "row" is the widget drawn immediately before this call — on a stepper
+     * that is the '>' button, so help appears once the cursor reaches the
+     * right-hand end of the row rather than on first landing. */
+    if (Port_ImGui_ConsoleMode()) {
+        if (ImGui::IsItemFocused() || ImGui::IsItemHovered())
+            sConsoleHelp = text;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        return;
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
@@ -3852,6 +3991,272 @@ static void DrawRibbon(void) {
     ImGui::PopStyleVar();
 }
 
+/* ------------------------------------------------------------------ */
+/*   Console / handheld settings shell                                 */
+/* ------------------------------------------------------------------ */
+/* Two pages instead of a tab strip:
+ *   0. a vertical list of groups — one row each, A enters
+ *   1. one group's settings — B backs out, L/R steps to the neighbouring
+ *      group without going back to the list
+ * with a fixed footer that spells the buttons out, because a handheld has
+ * no tooltips and no menu bar to discover them from.
+ *
+ * The bodies are the *same* DrawRibbon*Tab functions the desktop ribbon
+ * draws. That is deliberate: a setting can never exist on one shell and
+ * be missing from the other, and every future tab is one table row away
+ * from working here too. What changes is the frame around them — one
+ * group at a time, bigger hit rows, and the developer groups folded away
+ * behind an opt-in so the default list is short enough to read at a
+ * glance on a 3.5" panel. */
+
+struct ConsoleCat {
+    const char* name;
+    const char* blurb;
+    void (*draw)(void);
+    bool (*avail)(void); /* NULL = always shown */
+    bool advanced;       /* hidden until "Show advanced groups" is on */
+};
+
+static bool ConsoleCatRandoAvail(void) {
+    return !Rando_IsInGameplay() || Rando_IsActive();
+}
+
+static const ConsoleCat kConsoleCats[] = {
+    { "Display", "Screen size, frame rate, filters", DrawRibbonDisplayTab, nullptr, false },
+    { "Audio", "Volume, stereo width, reverb", DrawRibbonAudioTab, nullptr, false },
+    { "Controls", "Button bindings and hotkeys", DrawRibbonControlsTab, nullptr, false },
+    { "Save States", "Quick-save slots and previews", DrawRibbonSavesTab, nullptr, false },
+    { "Save Files", "Profiles, region and language", DrawRibbonProfilesTab, nullptr, false },
+    { "Accessibility", "Speech, audio cues, readability", DrawRibbonAccessibilityTab, nullptr, false },
+    { "Quality of Life", "Optional fixes and conveniences", DrawRibbonRebornTab, nullptr, false },
+    { "Equipment", "Extra item slots", DrawRibbonEquipTab, nullptr, false },
+    { "Randomizer", "Seed, logic and cosmetics", DrawRibbonRandomizerTab, ConsoleCatRandoAvail, false },
+    { "Items", "Give items, hearts, rupees", DrawRibbonItemsTab, nullptr, true },
+    { "Warp", "Jump to any area", DrawRibbonWarpTab, nullptr, true },
+    { "Practice", "Timer, splits, save points", DrawRibbonPracticeTab, nullptr, true },
+    { "Entities", "Live entity inspector", DrawRibbonEntitiesTab, nullptr, true },
+    { "Flags", "Story and local flags", DrawRibbonFlagsTab, nullptr, true },
+    { "Memory", "Watch and poke RAM", DrawRibbonMemoryTab, nullptr, true },
+};
+static const int kConsoleCatCount = (int)(sizeof(kConsoleCats) / sizeof(kConsoleCats[0]));
+
+static int sConsoleCat = 0;               /* index into kConsoleCats */
+static bool sConsoleInCat = false;        /* false = group list, true = group body */
+static bool sConsoleShowAdvanced = false; /* reveal the developer groups */
+static bool sConsoleRestoreCursor = false;
+
+static bool ConsoleCatVisible(int i) {
+    if (i < 0 || i >= kConsoleCatCount)
+        return false;
+    const ConsoleCat& c = kConsoleCats[i];
+    if (c.advanced && !sConsoleShowAdvanced)
+        return false;
+    return c.avail == nullptr || c.avail();
+}
+
+/* Step to the next visible group in `dir`, wrapping. Returns the same index
+ * when nothing else is visible. */
+static int ConsoleCatStep(int from, int dir) {
+    for (int n = 0; n < kConsoleCatCount; ++n) {
+        from = (from + dir + kConsoleCatCount) % kConsoleCatCount;
+        if (ConsoleCatVisible(from))
+            return from;
+    }
+    return from;
+}
+
+/* B / Escape, but only when it isn't already spoken for: ImGui routes the
+ * same press to closing a popup or cancelling an active widget, and acting
+ * on it here as well would pop the page out from under that. */
+static bool ConsoleCancelPressed(void) {
+    if (ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
+        return false;
+    return ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+}
+
+static void DrawConsoleHeader(const char* title, const char* right) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float h = ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0f;
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), ImGui::GetColorU32(ImVec4(0.15f, 0.28f, 0.19f, 1.0f)), 6.0f);
+    dl->AddText(ImVec2(p.x + ImGui::GetStyle().FramePadding.x, p.y + ImGui::GetStyle().FramePadding.y),
+                ImGui::GetColorU32(ImVec4(0.85f, 0.98f, 0.86f, 1.0f)), title);
+    if (right && *right) {
+        const float rw = ImGui::CalcTextSize(right).x;
+        dl->AddText(ImVec2(p.x + w - rw - ImGui::GetStyle().FramePadding.x, p.y + ImGui::GetStyle().FramePadding.y),
+                    ImGui::GetColorU32(ImVec4(0.62f, 0.78f, 0.64f, 1.0f)), right);
+    }
+    ImGui::Dummy(ImVec2(w, h));
+}
+
+/* Footer legend. The labels are the ones printed on a handheld's shell, not
+ * the keys the device actually sends — gptokeyb maps A to 'x' here, and
+ * "press X to select" would be a lie about the button under the player's
+ * thumb. The keyboard equivalents get their own dim line. */
+static void DrawConsoleFooter(bool inCat) {
+    ImGui::Separator();
+    if (sConsoleHelp && *sConsoleHelp) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.70f, 0.84f, 0.72f, 1.0f));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(sConsoleHelp);
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.72f, 0.72f, 1.0f));
+    if (inCat) {
+        ImGui::TextUnformatted("A  Select     B  Back     L / R  Group");
+        ImGui::TextDisabled("keyboard: Enter / Esc / PgUp / PgDn, arrows to move");
+    } else {
+        ImGui::TextUnformatted("A  Open     B  Close menu     D-pad  Move");
+        ImGui::TextDisabled("keyboard: Enter / Esc / arrows   -   F8 or Select+Start toggles this menu");
+    }
+    ImGui::PopStyleColor();
+}
+
+static void DrawConsoleCatList(void) {
+    ImGuiStyle& style = ImGui::GetStyle();
+    const float rowH = ImGui::GetTextLineHeight() * 2.0f + style.FramePadding.y * 2.0f;
+    const ImU32 nameCol = ImGui::GetColorU32(ImVec4(0.94f, 0.96f, 0.94f, 1.0f));
+    const ImU32 blurbCol = ImGui::GetColorU32(ImVec4(0.58f, 0.64f, 0.58f, 1.0f));
+
+    for (int i = 0; i < kConsoleCatCount; ++i) {
+        if (!ConsoleCatVisible(i))
+            continue;
+        const ConsoleCat& c = kConsoleCats[i];
+        ImGui::PushID(i);
+        /* Coming back from a group puts the cursor back on the row the
+         * player left, so B then A returns to where they were. */
+        if (sConsoleRestoreCursor && i == sConsoleCat) {
+            ImGui::SetKeyboardFocusHere();
+            sConsoleRestoreCursor = false;
+        }
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const bool activated = ImGui::Selectable("##catrow", i == sConsoleCat, ImGuiSelectableFlags_None,
+                                                 ImVec2(0, rowH));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddText(ImVec2(p.x + style.FramePadding.x, p.y + style.FramePadding.y * 0.5f), nameCol, c.name);
+        dl->AddText(ImVec2(p.x + style.FramePadding.x, p.y + style.FramePadding.y * 0.5f + ImGui::GetTextLineHeight()),
+                    blurbCol, c.blurb);
+        if (activated) {
+            sConsoleCat = i;
+            sConsoleInCat = true;
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::Dummy(ImVec2(0, style.ItemSpacing.y));
+    ImGui::Separator();
+    bool adv = sConsoleShowAdvanced;
+    if (ImGui::Checkbox("Show advanced groups", &adv)) {
+        sConsoleShowAdvanced = adv;
+        if (!adv && kConsoleCats[sConsoleCat].advanced)
+            sConsoleCat = ConsoleCatStep(sConsoleCat, +1);
+    }
+    if (ImGui::IsItemFocused() || ImGui::IsItemHovered())
+        sConsoleHelp = "Items, warps, flags, memory and practice tools. Debug aids, not game settings.";
+    if (ImGui::Button("Close Menu", ImVec2(-FLT_MIN, 0)))
+        Port_DebugMenu_Toggle();
+}
+
+static void DrawConsoleMenu(void) {
+    ImGuiIO& io = ImGui::GetIO();
+
+    /* Opening the settings menu by any route counts as discovering it. The
+     * desktop shell marks this from its corner trigger, which console mode
+     * doesn't draw. */
+    if (!Port_Config_GetMenuHintSeen())
+        Port_Config_SetMenuHintSeen(true);
+
+    if (!ConsoleCatVisible(sConsoleCat))
+        sConsoleCat = ConsoleCatStep(sConsoleCat, +1);
+
+    /* Full-screen and near-opaque: on a 3.5" panel a floating panel over
+     * live gameplay is unreadable, and there is no second window to reach. */
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.97f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 8));
+    /* Chunkier rows than the desktop ribbon: every one of these is a D-pad
+     * stop, and the value steppers are two adjacent 1-character buttons. */
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 8));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 8));
+
+    const char* helpThisFrame = nullptr;
+    if (ImGui::Begin("##console_menu", nullptr,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                         ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                         ImGuiWindowFlags_NoSavedSettings)) {
+        char right[48];
+        if (sConsoleInCat) {
+            /* Position within the *visible* groups, so the count doesn't
+             * jump around when the advanced ones are hidden. */
+            int shown = 0, pos = 0;
+            for (int i = 0; i < kConsoleCatCount; ++i) {
+                if (!ConsoleCatVisible(i))
+                    continue;
+                ++shown;
+                if (i == sConsoleCat)
+                    pos = shown;
+            }
+            std::snprintf(right, sizeof(right), "L  %d / %d  R", pos, shown);
+            DrawConsoleHeader(kConsoleCats[sConsoleCat].name, right);
+        } else {
+            DrawConsoleHeader("SETTINGS", "");
+        }
+
+        /* Reserve the footer before the body so the legend never scrolls
+         * away — it is the only place the buttons are written down. */
+        /* Measured, not guessed: the help line wraps, and a footer that is
+         * one line taller than its reservation loses the button legend off
+         * the bottom edge -- the one thing that must never be clipped. */
+        float footerH = ImGui::GetStyle().ItemSpacing.y * 2.0f + ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+        if (sConsoleHelp && *sConsoleHelp) {
+            footerH += ImGui::CalcTextSize(sConsoleHelp, nullptr, false, ImGui::GetContentRegionAvail().x).y +
+                       ImGui::GetStyle().ItemSpacing.y;
+        }
+        /* NavFlattened: without it the scrolling body is its own nav scope,
+         * so the D-pad highlights the *child window* and A "enters" it —
+         * two presses of ceremony before the cursor ever reaches a row.
+         * Flattened, the rows are part of the page's own nav scope and the
+         * first press of Down lands on one. */
+        if (ImGui::BeginChild("##console_body", ImVec2(0, -footerH), ImGuiChildFlags_NavFlattened)) {
+            sConsoleHelp = nullptr;
+            if (sConsoleInCat) {
+                kConsoleCats[sConsoleCat].draw();
+            } else {
+                DrawConsoleCatList();
+            }
+            helpThisFrame = sConsoleHelp;
+        }
+        ImGui::EndChild();
+
+        sConsoleHelp = helpThisFrame;
+        DrawConsoleFooter(sConsoleInCat);
+
+        /* Page transitions. Read after the body so an active widget (a
+         * combo, a slider being dragged, a binding capture) gets first
+         * refusal on the same press. */
+        if (sConsoleInCat) {
+            if (ConsoleCancelPressed()) {
+                sConsoleInCat = false;
+                sConsoleRestoreCursor = true;
+            } else if (!ImGui::IsAnyItemActive()) {
+                if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) || ImGui::IsKeyPressed(ImGuiKey_PageUp, false))
+                    sConsoleCat = ConsoleCatStep(sConsoleCat, -1);
+                else if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false))
+                    sConsoleCat = ConsoleCatStep(sConsoleCat, +1);
+            }
+        } else if (ConsoleCancelPressed()) {
+            Port_DebugMenu_Toggle();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(4);
+}
+
 /* Layout helpers — keep all the styling decisions in one place so it's
  * easy to tweak the look without hunting through draw code. */
 static void DrawToast(const char* text) {
@@ -4451,6 +4856,15 @@ extern "C" bool Port_ImGui_Render(void) {
             io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
         }
     }
+    /* ImGui gates gamepad nav on BackendFlags_HasGamepad, and the SDL3
+     * backend clears that flag every frame when SDL sees no gamepad. On a
+     * handheld SDL sees none — the pad arrives as a virtual keyboard — so
+     * the nav keys Port_ImGui_HandleGameInputEvent injects would be read
+     * and then ignored. Re-assert the flag while the menu wants nav; the
+     * only thing it enables is reading the ImGuiKey_Gamepad* keys, which
+     * are exactly what we feed. Must land after the backend's NewFrame
+     * (which clears it) and before ImGui::NewFrame (which runs nav).
+     * Set below, next to the NewFrame pair. */
 
 #ifdef TMC_GPU_RENDERER
     const bool gpuBackend = (sRenderer == nullptr);
@@ -4462,6 +4876,9 @@ extern "C" bool Port_ImGui_Render(void) {
         ImGui_ImplSDLRenderer3_NewFrame();
     }
     ImGui_ImplSDL3_NewFrame();
+    if (navWanted) {
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    }
     ImGui::NewFrame();
 
     /* Defensive cleanup on close-transition (open → closed). Without
@@ -4477,6 +4894,17 @@ extern "C" bool Port_ImGui_Render(void) {
          * dangling reference to a ribbon widget. Calling with nullptr
          * is the documented "no window focused" path. */
         ImGui::SetWindowFocus(nullptr);
+        ConsoleReleaseInjectedNav();
+        /* Reopening lands on the group list, not wherever the player was
+         * when they hit the toggle. */
+        sConsoleInCat = false;
+        sConsoleRestoreCursor = false;
+        sConsoleHelp = nullptr;
+    }
+    if (!sPrevMenuOpen && menuOpen) {
+        /* Put the cursor on a row the moment the menu opens, so the first
+         * D-pad press moves the selection instead of merely summoning it. */
+        sConsoleRestoreCursor = true;
     }
     sPrevMenuOpen = menuOpen;
 
@@ -4542,8 +4970,23 @@ extern "C" bool Port_ImGui_Render(void) {
     DrawToast(Port_DebugMenu_Toast());
 
     /* Always show the click-to-open trigger so mouse/touch users have a
-     * way in without the F8 hotkey. */
-    DrawMenuTrigger();
+     * way in without the F8 hotkey. Console mode skips it: it is a click
+     * target, and a handheld has no pointer to click it with — it would
+     * just be a dead widget parked over the top-right of the game. */
+    if (!Port_ImGui_ConsoleMode()) {
+        DrawMenuTrigger();
+    } else if (!Port_DebugMenu_IsOpen() && !Port_Config_GetMenuHintSeen()) {
+        /* Same one-shot discovery hint, as text rather than a button. */
+        ImGui::SetNextWindowBgAlpha(0.80f);
+        const ImVec2 hintVp = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowPos(ImVec2(hintVp.x - 6.0f, 6.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        if (ImGui::Begin("##console_menu_hint", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextColored(ImVec4(0.85f, 0.95f, 0.85f, 1.0f), "MENU or Select+Start:  Settings");
+        }
+        ImGui::End();
+    }
 
     /* Quit-save confirm modal — only renders when armed by
      * Port_ImGui_RequestQuitModal (called from port_bios.c when SDL
@@ -4552,7 +4995,9 @@ extern "C" bool Port_ImGui_Render(void) {
     DrawQuitModal();
 
     if (Port_DebugMenu_IsOpen()) {
-        if (sRibbonEnabled) {
+        if (Port_ImGui_ConsoleMode()) {
+            DrawConsoleMenu();
+        } else if (sRibbonEnabled) {
             DrawRibbon();
         } else {
             /* Render the deepest page only (legacy behaviour: submenu

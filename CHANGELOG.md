@@ -4,6 +4,28 @@
 
 ### Added
 
+- **A console settings menu, and A/B to drive it.** The settings menu now has
+  a second shell built for handhelds: one group at a time instead of a 15-tab
+  ribbon, two-line rows sized for a D-pad, a header that shows where you are
+  (`L  3 / 9  R`), and a fixed footer that spells the buttons out. B backs out
+  of a group and closes the menu from the group list; L/R step between groups;
+  the developer groups (items, warps, flags, memory, practice) are folded
+  behind a **Show advanced groups** toggle. The group bodies are the same code
+  the desktop ribbon draws, so no setting exists on one shell and not the
+  other.
+
+  Underneath it, the menu now answers to the player's *own* bindings: A, B,
+  D-pad, L and R drive every widget, on either shell. This is what makes the
+  menu usable on a muOS/PortMaster device at all — SDL sees no gamepad there
+  (weston's libinput refuses muOS-Keys, so gptokeyb hands the pad over as a
+  virtual keyboard whose face buttons are `x` and `z`), so before this the
+  menu could only be driven with Enter/Escape/arrows, keys the device cannot
+  send from its face buttons.
+
+  Which shell is drawn is **Display → Menu style**, persisted as `console_ui`
+  in `config.json`: `auto` (default — console shell when the window is
+  narrower than ~860 px), `console`, or `desktop`. `TMC_CONSOLE_UI=<0|1>`
+  overrides it for one session.
 - **`fast_forward_fps`** (`config.json`, default 60): how often the screen is
   refreshed while fast-forwarding. A tick that does not present skips the
   raster too, so on a handheld with an expensive present this is the whole
