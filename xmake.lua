@@ -151,6 +151,27 @@ local function add_mingw_static_cpp_runtime()
     end
 end
 
+-- POSIX bits that glibc only folded into libc proper in 2.34: shm_open /
+-- shm_unlink (port_shm_framebuffer.c) and pthread_create (std::thread, in
+-- the asset extractor's ParallelFor and in the port).
+--
+-- Hosted on ubuntu-22.04 (glibc 2.35) they resolve without being asked
+-- for, which is why nothing here ever named them. Against an older glibc
+-- they are still in librt/libpthread and the link fails outright. Both
+-- flags are correct on either side of that line: glibc keeps librt and
+-- libpthread as stubs from 2.34 precisely so that old link lines go on
+-- working.
+--
+-- This matters beyond CI. The aarch64 handheld build targets glibc 2.31
+-- so it can load on retro-handheld CFW at all, and without these it does
+-- not link there. macOS is excluded: both live in libSystem and it ships
+-- no librt.
+local function add_linux_posix_syslinks()
+    if is_plat("linux") then
+        add_syslinks("pthread", "rt")
+    end
+end
+
 -- ====================
 -- Third-party packages
 -- ====================
@@ -289,6 +310,7 @@ target("asset_extractor")
     add_includedirs("include", "port", ".")
     add_packages("nlohmann_json", "fmt")
     add_mingw_static_cpp_runtime()
+    add_linux_posix_syslinks()
     -- Embed assets/sounds.json into the binary so the extractor can guarantee
     -- it appears next to itself even when a release tarball forgets to ship
     -- the file (the v0.1.6 packaging bug behind issue #50). xmake's bin2c
@@ -966,18 +988,7 @@ target("tmc_pc")
         add_links("m")
     end
 
-    -- POSIX shared memory (port_shm_framebuffer.c: shm_open/shm_unlink).
-    --
-    -- glibc moved these out of librt and into libc proper in 2.34, so a
-    -- build hosted on ubuntu-22.04 (2.35) links them without being asked.
-    -- Against anything older they are still in librt and the link fails
-    -- with "undefined reference to shm_open" -- which is what the
-    -- glibc-2.31 container build found. Asking for -lrt is correct on
-    -- both: on >= 2.34 librt remains as a stub for exactly this reason.
-    -- macOS has them in libSystem and ships no librt.
-    if is_plat("linux") then
-        add_syslinks("rt")
-    end
+    add_linux_posix_syslinks()
 
     -- GLES compute rasterizer backend (port_gpu_raster_gl.cpp) needs EGL + GLES
     -- on Linux/Android; it's a no-op stub on Windows/macOS (Vulkan/Metal there).
