@@ -669,42 +669,59 @@ jobs:
           #
           # Sanity-check the scan before trusting a negative: an empty
           # result means the tool failed, not that the binary is empty.
-          nstr="$(strings -a "$BIN" | wc -l)"
+          # Dump once to a file and grep the FILE, never `strings | grep -q`.
+          #
+          # This step runs under `bash -e -o pipefail`, and `grep -q` exits
+          # the moment it matches, which SIGPIPEs `strings` and makes the
+          # pipeline return 141 -- on a SUCCESSFUL match. pipefail then
+          # turns every backend that IS present into a reported failure.
+          # Whether it bites depends on whether `strings` still had output
+          # buffered when grep quit, so it passed on the hosted runners for
+          # years and fails every time in the build container. Verified on
+          # the shipped binary: `strings -a tmc_pc | grep -qx dummy` gives
+          # 0 without pipefail and 141 with it.
+          #
+          # -a is deliberate too: without it `strings` scans only loaded
+          # data sections, and which ones that covers varies by binutils
+          # version (2.35 in bullseye, 2.38 on ubuntu-22.04).
+          syms="$(mktemp)"
+          strings -a "$BIN" > "$syms"
+          nstr="$(wc -l < "$syms")"
           echo "strings -a: $nstr strings in $BIN"
+
+          # An empty scan means the tool failed; any verdict from it would
+          # be meaningless, so say that rather than blaming the backends.
           if [ "$nstr" -lt 1000 ]; then
-            echo "::error::strings -a returned only $nstr lines — the scan failed, so any"
-            echo "  verdict below would be meaningless. Check binutils in this environment."
+            echo "::error::strings -a returned only $nstr lines — the scan failed, so no"
+            echo "  conclusion can be drawn. Check binutils in this environment."
             exit 1
           fi
 
           missing=()
           for backend in alsa pulseaudio pipewire; do
-            if ! strings -a "$BIN" | grep -qx "$backend"; then
-              missing+=("$backend")
-            fi
+            grep -qx "$backend" "$syms" || missing+=("$backend")
           done
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::SDL3 in $BIN missing audio backends: ${missing[*]}"
             echo "Install libasound2-dev / libpulse-dev / libpipewire-0.3-dev before xmake build."
 
-            # Which drivers DID survive tells you whether this is an audio
-            # problem or a detection problem: losing x11 and wayland too
-            # means SDL3's configure found nothing at all, which is a
-            # pkg-config/environment issue rather than a missing -dev package.
+            # Which drivers DID survive separates a packaging problem from
+            # a detection one: losing x11 and wayland too, or dummy, which
+            # SDL3 always compiles in, means SDL3's configure found nothing
+            # -- or that this check is broken again.
             echo "== drivers actually present in the binary =="
             for d in x11 wayland kmsdrm offscreen dummy alsa pulseaudio pipewire jack sndio; do
-              strings -a "$BIN" | grep -qx "$d" && echo "  $d" || true
+              grep -qx "$d" "$syms" && echo "  $d" || true
             done
+            echo "== NEEDED =="
+            objdump -p "$BIN" | awk '/NEEDED/ {print "  " $2}'
 
-            # SDL3's generated build config records the decision directly.
             cfg="$(find "${HOME}/.xmake/packages" /github/home/.xmake/packages \
                      /root/.xmake/packages -name SDL_build_config.h 2>/dev/null | head -1)"
             if [ -n "$cfg" ]; then
               echo "== $cfg =="
               grep -E 'SDL_AUDIO_DRIVER_(ALSA|PULSEAUDIO|PIPEWIRE)|SDL_VIDEO_DRIVER_(X11|WAYLAND)' "$cfg" || \
                 echo "  (no audio/video driver defines at all)"
-            else
-              echo "== no SDL_build_config.h found under ~/.xmake/packages =="
             fi
             exit 1
           fi
