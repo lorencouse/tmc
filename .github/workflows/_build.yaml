@@ -744,21 +744,29 @@ jobs:
         env:
           GLIBC_MAX: ${{ matrix.glibc_max }}
         run: |
-          set -uo pipefail
+          # GitHub invokes this with `bash -e -o pipefail`. Turn both off
+          # deliberately: this step is a report, and its greps are EXPECTED
+          # to come up empty -- no GLIBCXX_ reference is precisely the
+          # success case, and under -e that empty grep killed the step at
+          # the moment it had proved the thing it was checking for. The
+          # step manages its own exit status in $rc.
+          set +e +o pipefail
+          set -u
           BIN="build/pc/${{ matrix.exe_name }}"
-          test -f "$BIN"
+          test -f "$BIN" || { echo "::error::$BIN not found"; exit 1; }
 
           echo "== NEEDED =="
           objdump -p "$BIN" | awk '/NEEDED/ {print "  " $2}'
 
+          # One dump, then read it -- same reason the audio gate above uses
+          # a file: `objdump | grep -q`-shaped pipelines are a SIGPIPE trap.
+          dyn="$(mktemp)"
+          objdump -T "$BIN" > "$dyn"
+
           # Versioned symbol references, highest per soname. sort -V so
           # 2.9 does not outrank 2.17.
-          glibc_need="$(objdump -T "$BIN" \
-            | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
-            | sort -uV | tail -1)"
-          cxx_need="$(objdump -T "$BIN" \
-            | grep -oE '(GLIBCXX|CXXABI)_[0-9]+\.[0-9]+(\.[0-9]+)?' \
-            | sort -uV | tail -1)"
+          glibc_need="$(grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' "$dyn" | sort -uV | tail -1)"
+          cxx_need="$(grep -oE '(GLIBCXX|CXXABI)_[0-9]+\.[0-9]+(\.[0-9]+)?' "$dyn" | sort -uV | tail -1)"
           echo "== floors =="
           echo "  glibc:     ${glibc_need:-none}"
           echo "  libstdc++: ${cxx_need:-none (statically linked)}"
