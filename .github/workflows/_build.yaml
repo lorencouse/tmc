@@ -287,6 +287,27 @@ jobs:
           # requires >= 0.64.0".
           $SUDO pip3 install --upgrade 'meson>=1.4'
 
+      # SDL3's CMake finds alsa / pulseaudio / pipewire through
+      # pkg_check_modules, so if pkg-config cannot see them the backends
+      # are dropped silently and the only symptom is a binary that makes
+      # no sound. Print the state of that lookup while the cause is still
+      # attributable to this step rather than to a build 20 minutes later.
+      # Informational: the gate after the build is what fails.
+      - name: Probe pkg-config for the audio libraries (Linux)
+        if: ${{ matrix.os_name == 'linux' }}
+        shell: bash
+        run: |
+          echo "pkg-config: $(command -v pkg-config || echo MISSING)"
+          echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-<unset>}"
+          echo "PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-<unset>}"
+          for m in alsa libpulse libpipewire-0.3 x11; do
+            if pkg-config --exists "$m" 2>/dev/null; then
+              echo "  $m -> $(pkg-config --modversion "$m")"
+            else
+              echo "  $m -> NOT FOUND"
+            fi
+          done
+
       - name: Install macOS dependencies
         if: matrix.os_name == 'macos'
         # build.py's dep-probe wants fmt + nlohmann-json reachable via
@@ -645,6 +666,25 @@ jobs:
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::SDL3 in $BIN missing audio backends: ${missing[*]}"
             echo "Install libasound2-dev / libpulse-dev / libpipewire-0.3-dev before xmake build."
+
+            # Which drivers DID survive tells you whether this is an audio
+            # problem or a detection problem: losing x11 and wayland too
+            # means SDL3's configure found nothing at all, which is a
+            # pkg-config/environment issue rather than a missing -dev package.
+            echo "== drivers actually present in the binary =="
+            for d in x11 wayland kmsdrm offscreen dummy alsa pulseaudio pipewire jack sndio; do
+              strings "$BIN" | grep -qx "$d" && echo "  $d" || true
+            done
+
+            # SDL3's generated build config records the decision directly.
+            cfg="$(find "${HOME}/.xmake/packages" -name SDL_build_config.h 2>/dev/null | head -1)"
+            if [ -n "$cfg" ]; then
+              echo "== $cfg =="
+              grep -E 'SDL_AUDIO_DRIVER_(ALSA|PULSEAUDIO|PIPEWIRE)|SDL_VIDEO_DRIVER_(X11|WAYLAND)' "$cfg" || \
+                echo "  (no audio/video driver defines at all)"
+            else
+              echo "== no SDL_build_config.h found under ~/.xmake/packages =="
+            fi
             exit 1
           fi
           echo "OK: SDL3 has alsa + pulseaudio + pipewire compiled in."
