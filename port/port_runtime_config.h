@@ -248,6 +248,22 @@ float Port_Config_GetLcdPersistenceRho(void);
 void Port_Config_SetLcdPersistenceRho(float v);
 bool Port_Config_GetRibbonEnabled(void);
 void Port_Config_SetRibbonEnabled(bool on);
+/* Console/handheld settings UI. The desktop ribbon is a 15-tab bar sized for
+ * a mouse and a wide window; on a 640x480 handheld with no pointer it is
+ * unusable. Mode selects which shell the F8 menu draws:
+ *   PORT_CONSOLE_UI_AUTO — console shell when the window is narrow
+ *   PORT_CONSOLE_UI_ON   — always the console shell
+ *   PORT_CONSOLE_UI_OFF  — always the desktop ribbon / classic menu
+ * Persisted as "console_ui". TMC_CONSOLE_UI=<0|1> overrides for a session. */
+enum {
+    PORT_CONSOLE_UI_AUTO = 0,
+    PORT_CONSOLE_UI_ON = 1,
+    PORT_CONSOLE_UI_OFF = 2,
+};
+int Port_Config_GetConsoleUiMode(void);
+void Port_Config_SetConsoleUiMode(int mode);
+void Port_Config_CycleConsoleUiMode(int direction);
+const char* Port_Config_ConsoleUiModeName(int mode);
 /* One-shot "Press F8 for settings" discovery hint: false until the settings
  * menu is first opened, then persisted true so it never nags again. */
 bool Port_Config_GetMenuHintSeen(void);

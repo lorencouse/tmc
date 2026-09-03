@@ -14,6 +14,16 @@ bool Port_ImGui_CanPresent(void);
 bool Port_ImGui_WantsTextInput(void);
 void Port_ImGui_HandleEvent(const SDL_Event* event);
 
+/* True when the settings menu draws its console/handheld shell (one
+ * category at a time, D-pad + A/B) instead of the desktop ribbon. */
+bool Port_ImGui_ConsoleMode(void);
+
+/* Feed one SDL event through the player's *own* button bindings so the
+ * settings menu can be driven with A / B / D-pad / L / R. Returns true
+ * when the event was consumed by the menu and must not reach the game.
+ * Only call while the menu is open. */
+bool Port_ImGui_HandleGameInputEvent(const SDL_Event* event);
+
 bool Port_ImGui_IsEnabled(void);
 bool Port_ImGui_RibbonEnabled(void);
 void Port_ImGui_SetRibbonEnabled(bool enabled);

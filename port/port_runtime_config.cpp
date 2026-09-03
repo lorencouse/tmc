@@ -173,6 +173,9 @@ bool sColorCorrect = true; /* GBA-LCD colour correction (default on) */
 bool sLcdPersist = false;      /* LCD temporal persistence (default off) */
 float sLcdPersistRho = 0.35f;  /* persistence: fraction of prev frame kept */
 bool sRibbonCfg = true;        /* F8 menu style: ribbon (true) vs classic */
+/* Console/handheld settings shell: 0 auto (by window width), 1 on, 2 off.
+ * See PORT_CONSOLE_UI_* in port_runtime_config.h. */
+int sConsoleUiMode = 0;
 bool sMenuHintSeen = false;    /* set once the F8/settings menu is first opened */
 float sMasterVolume = 1.0f;    /* game master volume [0,1]; 1.0 = unchanged */
 bool sHoldAdvanceText = false; /* hold an advance key to keep paging text */
@@ -321,6 +324,7 @@ const IntCfg kIntCfg[] = {
     { "rando_accessibility", &sRandoAccessibility, 0 },
     { "savestate_slot", &sSaveStateSlot, 0 },
     { "fast_forward_fps", &sFastForwardFps, 60 },
+    { "console_ui", &sConsoleUiMode, 0 },
 };
 const StrCfg kStrCfg[] = {
     { "upscale_method", &sUpscaleMethod, "nearest" },
@@ -1882,6 +1886,37 @@ extern "C" void Port_Config_SetRibbonEnabled(bool on) {
     sRibbonCfg = on;
     sConfigJson["ribbon_mode"] = on;
     SaveConfig();
+}
+extern "C" int Port_Config_GetConsoleUiMode(void) {
+    return (sConsoleUiMode >= PORT_CONSOLE_UI_AUTO && sConsoleUiMode <= PORT_CONSOLE_UI_OFF) ? sConsoleUiMode
+                                                                                             : PORT_CONSOLE_UI_AUTO;
+}
+extern "C" void Port_Config_SetConsoleUiMode(int mode) {
+    if (mode < PORT_CONSOLE_UI_AUTO || mode > PORT_CONSOLE_UI_OFF)
+        mode = PORT_CONSOLE_UI_AUTO;
+    if (mode == sConsoleUiMode)
+        return;
+    sConsoleUiMode = mode;
+    sConfigJson["console_ui"] = mode;
+    SaveConfig();
+}
+extern "C" void Port_Config_CycleConsoleUiMode(int direction) {
+    int mode = Port_Config_GetConsoleUiMode() + (direction >= 0 ? 1 : -1);
+    if (mode < PORT_CONSOLE_UI_AUTO)
+        mode = PORT_CONSOLE_UI_OFF;
+    if (mode > PORT_CONSOLE_UI_OFF)
+        mode = PORT_CONSOLE_UI_AUTO;
+    Port_Config_SetConsoleUiMode(mode);
+}
+extern "C" const char* Port_Config_ConsoleUiModeName(int mode) {
+    switch (mode) {
+        case PORT_CONSOLE_UI_ON:
+            return "on";
+        case PORT_CONSOLE_UI_OFF:
+            return "off";
+        default:
+            return "auto";
+    }
 }
 extern "C" bool Port_Config_GetMenuHintSeen(void) {
     return sMenuHintSeen;

@@ -402,6 +402,16 @@ static void Port_PPU_ReplicateNearest(uint32_t* dstFrame, const uint32_t* srcFra
                                       int S) {
     const int dstW = FW * S;
     const size_t rowBytes = (size_t)dstW * sizeof(uint32_t);
+    /* Each source row owns a disjoint block of S destination rows, so the
+     * outer loop parallelises with no sharing. This is pure memory traffic
+     * (240x160 -> 480x320 is 1.2 MB written per frame at S=2) and it ran
+     * serially on the present path while the scanline raster right before it
+     * was already OpenMP-parallel — on a 4-core handheld that single-threaded
+     * tail is a visible slice of the frame budget. Threshold keeps the
+     * fork/join off tiny frames where it would cost more than it saves. */
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (FH * S >= 240)
+#endif
     for (int sy = 0; sy < FH; ++sy) {
         const uint32_t* src = &srcFrame[(size_t)sy * (size_t)srcPitchPixels];
         uint32_t* row0 = &dstFrame[(size_t)sy * (size_t)S * (size_t)dstW];

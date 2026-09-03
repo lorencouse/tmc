@@ -54,6 +54,14 @@
   release is deliberately not gated on the menu being closed, so opening the
   menu mid-hold cannot leave it stuck on.
 
+### Changed
+
+- **The nearest-replicate prescale is OpenMP-parallel.** At `internal_scale`
+  2 it writes 1.2 MB per frame and it ran single-threaded on the present path,
+  immediately after a scanline raster that was already parallel. Each source
+  row owns a disjoint block of destination rows, so the outer loop threads
+  with no sharing; small frames keep the serial path.
+
 ### Fixed
 
 - **The decoupled pacer could spiral into ~8 fps and stay there.** On a
