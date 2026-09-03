@@ -812,6 +812,21 @@ void VBlankIntrWait(void) {
         unsigned refresh = Port_PPU_DisplayRefreshRate();
         u32 vsyncCeiling = refresh > 0 ? (u32)refresh : 60;
         bool mustDisable = sFastForward || targetFps == 0 || targetFps > vsyncCeiling;
+        /* TMC_PACE_VSYNC_OFF_AFTER=<ticks>: pacing experiment -- start with the
+         * configured VSync, then switch it off for good after this many ticks.
+         * On the RG35XX SP a software renderer created with VSync off presents
+         * in ~78 ms, while one created with it on and switched off later
+         * presents in ~8 ms; this isolates that. */
+        {
+            static long offAfter = -2;
+            static u32 ticks = 0;
+            if (offAfter == -2) {
+                const char* e = getenv("TMC_PACE_VSYNC_OFF_AFTER");
+                offAfter = (e && *e) ? atol(e) : -1;
+            }
+            if (offAfter >= 0 && ++ticks > (u32)offAfter)
+                mustDisable = true;
+        }
         Port_PPU_SetVSync(Port_Config_GetVSync() && !mustDisable);
         {
             static unsigned lastRefresh = 0xFFFFFFFFu;
@@ -962,8 +977,10 @@ void VBlankIntrWait(void) {
         sVsyncLockedNow = vsyncLocked ? 1 : 0;
         if (vsyncLocked) {
             u64 cycleStart = lastFrameNs;
+            bool caughtUp = false;
             if (sVsyncLockCatchUp > 0) {
                 sVsyncLockCatchUp--; /* pay back the overrun: no present this tick */
+                caughtUp = true;
                 now = SDL_GetTicksNS();
             } else {
                 Port_PresentOnce(true);
@@ -972,6 +989,15 @@ void VBlankIntrWait(void) {
                 if (cycleStart != 0 && now - cycleStart > tickPeriodNs + tickPeriodNs / 2) {
                     sVsyncLockCatchUp = 1;
                 }
+            }
+            /* The present is trusted to pace us only downwards. If it returned
+             * early (a renderer that does not actually block, a display that
+             * turned out faster than reported, the title screen on a 120 Hz
+             * laptop), hold the tick grid ourselves: game speed must never
+             * exceed the tick rate. */
+            if (cycleStart != 0 && now - cycleStart < tickPeriodNs && !caughtUp) {
+                SDL_DelayPrecise(tickPeriodNs - (now - cycleStart));
+                now = cycleStart + tickPeriodNs;
             }
             lastFrameNs = now;
             sNextPresentNs = now + renderPeriodNs; /* sane grid if we leave this mode */
