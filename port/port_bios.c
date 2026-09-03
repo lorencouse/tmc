@@ -603,6 +603,8 @@ static u32 sVsyncOverloadHold = 0;
 /* Vsync-locked ticks: >0 means the next tick runs without a present to pay
  * back a cycle that missed a refresh (see the decoupled pacer). */
 static u32 sVsyncLockCatchUp = 0;
+static int sVsyncLockedNow = 0;    /* for the TMC_PACE_LOG line */
+static u64 sPacePresentNsThisSec = 0; /* summed present durations, for the TMC_PACE_LOG line */
 static u32 sPresentsThisSec = 0;        /* presents in the 1 s FPS-title window */
 
 /* Live rates for the on-screen FPS counter (port_imgui_menu.cpp externs
@@ -709,6 +711,7 @@ static void Port_PresentOnce(bool firstOfTick) {
     sPresentCostEmaNs += (u64)(((s64)dt - (s64)sPresentCostEmaNs) / 8);
     sLastPresentEndNs = end;
     sPresentsThisSec++;
+    sPacePresentNsThisSec += dt;
     if (Port_Profile_Enabled()) {
         sProfAccPresentNs += dt;
         if (dt > sProfMaxPresentNs)
@@ -810,6 +813,17 @@ void VBlankIntrWait(void) {
         u32 vsyncCeiling = refresh > 0 ? (u32)refresh : 60;
         bool mustDisable = sFastForward || targetFps == 0 || targetFps > vsyncCeiling;
         Port_PPU_SetVSync(Port_Config_GetVSync() && !mustDisable);
+        {
+            static unsigned lastRefresh = 0xFFFFFFFFu;
+            static int lastVs = -1;
+            int vs = Port_PPU_VSyncEnabled() ? 1 : 0;
+            if (refresh != lastRefresh || vs != lastVs) {
+                fprintf(stderr, "[pace] display refresh=%u Hz (ceiling %u), vsync=%d, target=%u fps\n", refresh,
+                        vsyncCeiling, vs, targetFps);
+                lastRefresh = refresh;
+                lastVs = vs;
+            }
+        }
     }
 
     decoupled = Port_Config_GetDecoupleRender() && !Port_PacingForceLegacy();
@@ -945,6 +959,7 @@ void VBlankIntrWait(void) {
             u64 diff = refreshNs > tickPeriodNs ? refreshNs - tickPeriodNs : tickPeriodNs - refreshNs;
             vsyncLocked = diff * 100 <= tickPeriodNs; /* within 1% */
         }
+        sVsyncLockedNow = vsyncLocked ? 1 : 0;
         if (vsyncLocked) {
             u64 cycleStart = lastFrameNs;
             if (sVsyncLockCatchUp > 0) {
@@ -1096,8 +1111,9 @@ void VBlankIntrWait(void) {
                 paceLog = (e && *e && e[0] != '0') ? 1 : 0;
             }
             if (paceLog) {
-                fprintf(stderr, "[pace] tps=%.2f fps=%.2f target=%u decoupled=%d ff=%d\n", tps, fps,
-                        Port_Config_TargetFps(), decoupled ? 1 : 0, sFastForward ? 1 : 0);
+                fprintf(stderr, "[pace] tps=%.2f fps=%.2f target=%u decoupled=%d ff=%d lock=%d present=%.2fms\n", tps,
+                        fps, Port_Config_TargetFps(), decoupled ? 1 : 0, sFastForward ? 1 : 0, sVsyncLockedNow,
+                        sPresentsThisSec ? (double)sPacePresentNsThisSec / 1e6 / (double)sPresentsThisSec : 0.0);
             }
         }
 
@@ -1119,6 +1135,7 @@ void VBlankIntrWait(void) {
         sFpsWindowStartNs = nowNs;
         sFpsFrameCount = 0;
         sPresentsThisSec = 0;
+        sPacePresentNsThisSec = 0;
     }
 
     /* The ImGui quit-confirm modal is rendered once per frame from

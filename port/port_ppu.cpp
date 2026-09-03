@@ -523,6 +523,18 @@ static bool sVSyncEnabled = true;
 extern "C" unsigned Port_PPU_DisplayRefreshRate(void) {
     static unsigned cached = 0;
     static int countdown = 0;
+    /* TMC_FORCE_REFRESH=<hz>: pretend the display runs at this rate. Pacing
+     * experiments on panels whose reported mode is off-nominal (RG35XX SP:
+     * 640x480 @ 66.8 Hz) without rebuilding. */
+    static int forced = -1;
+    if (forced < 0) {
+        const char* e = getenv("TMC_FORCE_REFRESH");
+        forced = (e && *e) ? atoi(e) : 0;
+        if (forced < 0)
+            forced = 0;
+    }
+    if (forced > 0)
+        return (unsigned)forced;
     if (--countdown <= 0) {
         countdown = 120;
         cached = 0;
