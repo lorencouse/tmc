@@ -47,7 +47,7 @@ jobs:
           # Use Ubuntu 22.04 (glibc 2.35) so the Linux binary runs on
           # older distros — Nobara 43, Fedora 43, Kubuntu 25.10. Building
           # on ubuntu-latest pins glibc 2.43+ which excludes most users.
-          linux='{"runner":"ubuntu-22.04","os_name":"linux","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":""}'
+          linux='{"runner":"ubuntu-22.04","os_name":"linux","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":"","cache_tag":""}'
           # Linux ARM64 (aarch64) via GitHub's native arm64 runner, built
           # inside a Debian bullseye container.
           #
@@ -64,27 +64,27 @@ jobs:
           # concepts, ranges, format or coroutines, so no LLVM backport
           # is needed. The runner stays the native arm64 one — this is a
           # container, not a cross-compile.
-          linux_arm='{"runner":"ubuntu-22.04-arm","os_name":"linux","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"debian:bullseye","glibc_max":"2.31"}'
+          linux_arm='{"runner":"ubuntu-22.04-arm","os_name":"linux","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"debian:bullseye","glibc_max":"2.31","cache_tag":"bullseye"}'
           # Pin to windows-2022: GitHub rolled `windows-latest` to Server
           # 2025 with a different VS/MinGW tooling layout, which broke
           # xmake-repo's libpng install step (exit 127 at the post-compile
           # install). The v0.1.6.x release built fine on windows-2022.
-          windows='{"runner":"windows-2022","os_name":"windows","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe","container":"","glibc_max":""}'
+          windows='{"runner":"windows-2022","os_name":"windows","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe","container":"","glibc_max":"","cache_tag":""}'
           # Windows ARM64 (aarch64) via the native windows-11-arm runner +
           # llvm-mingw (dedicated install step). In "all": validated green
           # (the x86 MinGW path — choco gcc, -mno-ms-bitfields, libgomp —
           # doesn't apply, so it uses aarch64 clang + -static; OpenMP is
           # degraded to serial there). Also reachable via os_filter
           # windows-arm or arm.
-          windows_arm='{"runner":"windows-11-arm","os_name":"windows","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe","container":"","glibc_max":""}'
+          windows_arm='{"runner":"windows-11-arm","os_name":"windows","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe","container":"","glibc_max":"","cache_tag":""}'
           # macos-14 = Apple Silicon arm64; macos-15-intel = Intel x86_64.
           # Use the explicit Intel label: older Intel image aliases can remain
           # queued indefinitely once GitHub-hosted runner capacity/labels move.
           # Both keep os_name="macos" so the brew dep-install step's condition
           # (`matrix.os_name == 'macos'`) covers both runners. Archive name uses
           # ${matrix.arch} to disambiguate the assets.
-          macos_arm='{"runner":"macos-14","os_name":"macos","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":""}'
-          macos_x86='{"runner":"macos-15-intel","os_name":"macos","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":""}'
+          macos_arm='{"runner":"macos-14","os_name":"macos","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":"","cache_tag":""}'
+          macos_x86='{"runner":"macos-15-intel","os_name":"macos","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":"","cache_tag":""}'
           # Full release/CI coverage is six native hosted targets:
           #   x86_64: Linux, Windows, macOS Intel
           #   arm64:  Linux, Windows, macOS Apple Silicon
@@ -392,9 +392,18 @@ jobs:
           # (windows-x86_64), and the Linux/macOS GCC/clang package
           # binaries never cross-contaminate.
           actions-cache-folder: '.xmake-cache'
-          actions-cache-key: ${{ matrix.os_name }}-${{ matrix.arch }}
+          # cache_tag separates build environments that share an os+arch.
+          # The linux-arm64 leg builds in a glibc-2.31 container while
+          # everything else builds on the hosted runner's glibc 2.35, and
+          # a shared key let the container restore host-built packages:
+          # a cached SDL3 static library compiled against 2.35 carries
+          # 2.34+ symbol references straight into tmc_pc, which both
+          # defeats the point of the container and reintroduces the very
+          # ABI floor this leg exists to lower. Empty for every other leg,
+          # so their existing keys are unchanged.
+          actions-cache-key: ${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.cache_tag && format('-{0}', matrix.cache_tag) || '' }}
           package-cache: true
-          package-cache-key: ${{ matrix.os_name }}-${{ matrix.arch }}
+          package-cache-key: ${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.cache_tag && format('-{0}', matrix.cache_tag) || '' }}
           project-path: '.'
 
       # Single-region build guard. The shipped binary is a fat multi-region
