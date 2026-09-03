@@ -657,9 +657,29 @@ jobs:
         run: |
           BIN="build/pc/${{ matrix.exe_name }}"
           test -f "$BIN"
+
+          # -a, explicitly. Without it `strings` scans only initialized,
+          # loaded data sections, and what that covers depends on the
+          # binutils version: bullseye's 2.35 in the build container finds
+          # nothing at all in this ELF where ubuntu-22.04's 2.38 finds
+          # everything. That made this gate report all three backends
+          # missing from a binary that had them, which cost a debugging
+          # round before the driver dump below showed even "dummy" and
+          # "x11" absent -- strings SDL3 always compiles in.
+          #
+          # Sanity-check the scan before trusting a negative: an empty
+          # result means the tool failed, not that the binary is empty.
+          nstr="$(strings -a "$BIN" | wc -l)"
+          echo "strings -a: $nstr strings in $BIN"
+          if [ "$nstr" -lt 1000 ]; then
+            echo "::error::strings -a returned only $nstr lines — the scan failed, so any"
+            echo "  verdict below would be meaningless. Check binutils in this environment."
+            exit 1
+          fi
+
           missing=()
           for backend in alsa pulseaudio pipewire; do
-            if ! strings "$BIN" | grep -qx "$backend"; then
+            if ! strings -a "$BIN" | grep -qx "$backend"; then
               missing+=("$backend")
             fi
           done
@@ -673,11 +693,12 @@ jobs:
             # pkg-config/environment issue rather than a missing -dev package.
             echo "== drivers actually present in the binary =="
             for d in x11 wayland kmsdrm offscreen dummy alsa pulseaudio pipewire jack sndio; do
-              strings "$BIN" | grep -qx "$d" && echo "  $d" || true
+              strings -a "$BIN" | grep -qx "$d" && echo "  $d" || true
             done
 
             # SDL3's generated build config records the decision directly.
-            cfg="$(find "${HOME}/.xmake/packages" -name SDL_build_config.h 2>/dev/null | head -1)"
+            cfg="$(find "${HOME}/.xmake/packages" /github/home/.xmake/packages \
+                     /root/.xmake/packages -name SDL_build_config.h 2>/dev/null | head -1)"
             if [ -n "$cfg" ]; then
               echo "== $cfg =="
               grep -E 'SDL_AUDIO_DRIVER_(ALSA|PULSEAUDIO|PIPEWIRE)|SDL_VIDEO_DRIVER_(X11|WAYLAND)' "$cfg" || \
