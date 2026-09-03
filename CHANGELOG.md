@@ -4,6 +4,39 @@
 
 ### Added
 
+- **`present_thread`** (`config.json`, default off): blit the window on a
+  worker thread instead of the game thread. `TMC_PRESENT_THREAD=<0|1>`
+  overrides for one session.
+
+  This is for hosts where the present is both expensive and blocking. On a
+  PortMaster/muOS handheld the game draws through Xwayland to weston, and that
+  X socket has no MIT-SHM — the kernel is built without SysV shared memory, so
+  every present copies the whole window through the socket. Measured on an
+  RG35XX SP: ~5 ms while frames stream and ~17 ms once the compositor goes
+  idle, against a 16.67 ms tick. Nothing in pacing can hide that; the
+  decoupled pacer's cost-fit check simply refuses the next present, which
+  leaves the compositor idle and makes the one after that dearer still.
+
+  So the copy moves off the game thread. The engine rasters and prescales as
+  before, hands the finished pixels over and returns; the worker owns the
+  texture and does upload -> clear -> compose -> present. Handoff is
+  latest-wins — a frame that arrives while the worker is busy overwrites the
+  pending one rather than queueing — so the engine never blocks on the display
+  and a slow present costs display rate, never game speed. The pacer needs no
+  changes: its present-cost EMA measures what this thread actually pays, which
+  is now a memcpy, so the fit test starts passing on its own.
+
+  Overlays (the settings menu, soft slots, touch controls) draw through the
+  same renderer AND read live game state, so they can never run on the worker.
+  `Port_ImGui_Render` is therefore split: the menu frame is *built* first,
+  which touches no renderer, and whether it produced any draw data decides the
+  path. An empty frame — the normal case during gameplay in console mode —
+  takes the threaded present; anything else drains the worker and presents
+  synchronously exactly as before. Any future overlay gets this for free.
+
+  Off by default: where the present is already cheap, the staging copy the
+  handoff adds is a small net loss.
+
 - **A console settings menu, and A/B to drive it.** The settings menu now has
   a second shell built for handhelds: one group at a time instead of a 15-tab
   ribbon, two-line rows sized for a D-pad, a header that shows where you are

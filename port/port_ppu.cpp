@@ -1,4 +1,5 @@
 #include "port_ppu.h"
+#include "port_present_thread.h"
 #include "port_debug_menu.h"
 #include "port_gba_mem.h"
 #include "port_hdma.h"
@@ -578,6 +579,9 @@ extern "C" void Port_PPU_SetVSync(bool enabled) {
     switch (sBackend) {
         case RenderBackend::Renderer:
             if (sRenderer != nullptr) {
+                /* Renderer call from the main thread: the present worker must
+                 * be finished with it first. */
+                Port_PresentThread_Drain();
                 SDL_SetRenderVSync(sRenderer, enabled ? 1 : 0);
             }
             break;
@@ -975,6 +979,13 @@ extern "C" void Port_PPU_Init(SDL_Window* window) {
         } else {
             Port_PPU_EnsureXbrzBuffers(240, 160);
             sBackend = RenderBackend::Renderer;
+            /* Off-thread window blit. Opt-in: it only pays where the present
+             * is expensive and blocking (an X socket with no MIT-SHM), and on
+             * a host whose present is already cheap the extra staging copy is
+             * a small loss. See port_present_thread.h. */
+            if (Port_Config_GetPresentThread()) {
+                Port_PresentThread_Start(sRenderer);
+            }
         }
     }
 
@@ -1608,7 +1619,18 @@ extern "C" void Port_PPU_PresentFrame(void) {
         SDL_FRect stage = { (float)sx, (float)sy, (float)sw_stage, (float)sh_stage };
         SDL_FRect dst = { (float)x, (float)y, (float)w, (float)h };
 
-        SDL_Texture* tex = nullptr;
+        /* ---- Stage 1: choose the pixels, on plain CPU buffers ----
+         * Upscaling and filtering happen here, and nothing in this stage
+         * touches the renderer or a texture. That is what lets the result be
+         * handed to the present worker instead of being blitted on this
+         * thread -- see port_present_thread.h. */
+        enum class SrcKind { Raw, HiRes, Scaled };
+        const uint32_t* srcPixels = presentFrame;
+        int srcW = presentW;
+        int srcH = presentH;
+        int srcPitch = presentPitchBytes;
+        SrcKind srcKind = SrcKind::Raw;
+        int srcScale = 1;
         SDL_ScaleMode scale;
         const int internalS = (int)Port_Config_InternalScale();
         switch (sPresentMode) {
@@ -1620,25 +1642,18 @@ extern "C" void Port_PPU_PresentFrame(void) {
                 if (Port_PPU_EnsureXbrzBuffers(presentW, presentH)) {
                     const int hiW = presentW * 4;
                     const int hiH = presentH * 4;
-                    SDL_Texture* hiTex =
-                        Port_PPU_EnsureTexture(&sHiResTexture, &sHiResTextureW, &sHiResTextureH, hiW, hiH);
-                    if (hiTex != nullptr) {
-                        Port_Upscale_xBRZ_4x_Pitch(presentFrame, presentW, presentH,
-                                                   presentPitchBytes / (int)sizeof(uint32_t), sUpscale2xBuf,
-                                                   sUpscale4xBuf);
-                        Port_Filter_Apply(sUpscale4xBuf, hiW, hiH, 4, sFilter);
-                        SDL_UpdateTexture(hiTex, nullptr, sUpscale4xBuf, hiW * (int)sizeof(uint32_t));
-                        tex = hiTex;
-                    }
+                    Port_Upscale_xBRZ_4x_Pitch(presentFrame, presentW, presentH,
+                                               presentPitchBytes / (int)sizeof(uint32_t), sUpscale2xBuf,
+                                               sUpscale4xBuf);
+                    Port_Filter_Apply(sUpscale4xBuf, hiW, hiH, 4, sFilter);
+                    srcPixels = sUpscale4xBuf;
+                    srcW = hiW;
+                    srcH = hiH;
+                    srcPitch = hiW * (int)sizeof(uint32_t);
+                    srcKind = SrcKind::HiRes;
                 }
-                if (tex == nullptr) {
-                    SDL_Texture* rawTex =
-                        Port_PPU_EnsureTexture(&sLowResTexture, &sLowResTextureW, &sLowResTextureH, presentW, presentH);
-                    if (rawTex == nullptr)
-                        return;
-                    SDL_UpdateTexture(rawTex, nullptr, presentFrame, presentPitchBytes);
-                    tex = rawTex;
-                }
+                /* Buffer alloc failed: stay on the native frame rather than
+                 * dropping this one. */
                 scale = (sPresentMode == PresentMode::XbrzLinear) ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST;
                 break;
             case PresentMode::LinearRaw:
@@ -1655,23 +1670,96 @@ extern "C" void Port_PPU_PresentFrame(void) {
                 }
                 uint32_t* scaled =
                     Port_PPU_BuildScaledFrame(presentFrame, presentW, presentH, presentPitchBytes, effScale, &sw, &sh);
-                SDL_Texture* scaledTex = scaled ? Port_PPU_EnsureScaledTexture(sw, sh, effScale) : nullptr;
-                if (scaled && scaledTex) {
+                if (scaled != nullptr) {
                     Port_Filter_Apply(scaled, sw, sh, effScale, sFilter);
-                    SDL_UpdateTexture(scaledTex, nullptr, scaled, sw * (int)sizeof(uint32_t));
-                    tex = scaledTex;
-                } else {
-                    SDL_Texture* rawTex =
-                        Port_PPU_EnsureTexture(&sLowResTexture, &sLowResTextureW, &sLowResTextureH, presentW, presentH);
-                    if (rawTex == nullptr)
-                        return;
-                    SDL_UpdateTexture(rawTex, nullptr, presentFrame, presentPitchBytes);
-                    tex = rawTex;
+                    srcPixels = scaled;
+                    srcW = sw;
+                    srcH = sh;
+                    srcPitch = sw * (int)sizeof(uint32_t);
+                    srcKind = SrcKind::Scaled;
+                    srcScale = effScale;
                 }
                 scale = (sPresentMode == PresentMode::LinearRaw) ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST;
                 break;
             }
         }
+
+        const PortBgFill bgFill = Port_Config_BgFill();
+        u8 bgR = 0, bgG = 0, bgB = 0;
+        if (bgFill == PORT_BG_FILL_SOLID_COLOR) {
+            Port_Config_BgFillColor(&bgR, &bgG, &bgB);
+        }
+
+        /* ---- Stage 2: overlays, and the choice of present path ----
+         * Overlays draw through the same renderer the worker owns AND read
+         * live game state, so they can only ever run on this thread. Build
+         * the ImGui frame (no renderer involved) and let what it actually
+         * produced decide: an empty frame — the normal case during gameplay
+         * — clears the way for a threaded present. */
+        const bool imguiLive = Port_ImGui_BuildFrame();
+        const bool overlayWanted = (imguiLive && Port_ImGui_HasDrawData()) || Port_SoftSlots_OverlayVisible() ||
+                                   Port_TouchControls_IsVisible();
+
+        if (!overlayWanted && Port_PresentThread_Active()) {
+            PortPresentJob job;
+            SDL_zero(job);
+            job.pixels = srcPixels;
+            job.w = srcW;
+            job.h = srcH;
+            job.pitchBytes = srcPitch;
+            job.stage = stage;
+            job.dst = dst;
+            job.scale = scale;
+            job.bgFill = (int)bgFill;
+            job.bgR = bgR;
+            job.bgG = bgG;
+            job.bgB = bgB;
+            if (Port_PresentThread_Submit(&job)) {
+                /* The touch layer's per-frame held-state update is input
+                 * bookkeeping, not drawing; a null renderer makes it skip the
+                 * draw and do the rest. Skipping it entirely would freeze
+                 * on-screen-pad input. */
+                Port_TouchControls_Render(nullptr, outW, outH);
+                /* All of this frame's cost landed in the raster/upload phase;
+                 * the blit is the worker's now and is reported separately. */
+                gPortProfPresentPhaseNs[0] += SDL_GetTicksNS() - phStart;
+                return;
+            }
+            /* Submit refused (staging alloc failed) — fall through and do it
+             * here rather than drop the frame. */
+        }
+
+        /* ---- Stage 3: synchronous present ----
+         * This thread is about to use the renderer, so the worker must be
+         * finished with it. Cheap when the worker is idle or absent. */
+        Port_PresentThread_Drain();
+
+        SDL_Texture* tex = nullptr;
+        switch (srcKind) {
+            case SrcKind::HiRes:
+                tex = Port_PPU_EnsureTexture(&sHiResTexture, &sHiResTextureW, &sHiResTextureH, srcW, srcH);
+                break;
+            case SrcKind::Scaled:
+                tex = Port_PPU_EnsureScaledTexture(srcW, srcH, srcScale);
+                break;
+            case SrcKind::Raw:
+                tex = Port_PPU_EnsureTexture(&sLowResTexture, &sLowResTextureW, &sLowResTextureH, srcW, srcH);
+                break;
+        }
+        if (tex == nullptr && srcKind != SrcKind::Raw) {
+            /* Texture creation failed at the upscaled size: show the native
+             * frame rather than nothing. */
+            srcPixels = presentFrame;
+            srcW = presentW;
+            srcH = presentH;
+            srcPitch = presentPitchBytes;
+            tex = Port_PPU_EnsureTexture(&sLowResTexture, &sLowResTextureW, &sLowResTextureH, srcW, srcH);
+        }
+        if (tex == nullptr) {
+            return;
+        }
+        SDL_UpdateTexture(tex, nullptr, srcPixels, srcPitch);
+
         /* Clear-to-black covers anything outside the stage rect (the
          * area honoring the user's aspect-ratio choice). Inside the
          * stage, the chosen background-fill style applies; on top of
@@ -1680,10 +1768,7 @@ extern "C" void Port_PPU_PresentFrame(void) {
         SDL_SetRenderDrawColor(sRenderer, 0, 0, 0, 255);
         SDL_RenderClear(sRenderer);
 
-        const PortBgFill bgFill = Port_Config_BgFill();
         if (bgFill == PORT_BG_FILL_SOLID_COLOR) {
-            u8 bgR = 0, bgG = 0, bgB = 0;
-            Port_Config_BgFillColor(&bgR, &bgG, &bgB);
             SDL_SetRenderDrawColor(sRenderer, bgR, bgG, bgB, 255);
             SDL_RenderFillRect(sRenderer, &stage);
         } else if (bgFill == PORT_BG_FILL_BLURRED_FRAME) {
@@ -1697,11 +1782,14 @@ extern "C" void Port_PPU_PresentFrame(void) {
         Port_PPU_SetTextureScaleModeCached(tex, scale);
         SDL_RenderTexture(sRenderer, tex, nullptr, &dst);
         {
-            /* Try the ImGui-based menu first; if disabled (or init
-             * failed), fall back to the legacy SDL_RenderDebugText
-             * overlay so the menu still works. The soft-slot overlay
-             * is a separate HUD layer and always uses SDL primitives. */
-            if (!Port_ImGui_Render()) {
+            /* The ImGui frame was built in stage 2; hand it to the renderer
+             * now that the game frame is underneath it. If ImGui is disabled
+             * (or init failed), fall back to the legacy SDL_RenderDebugText
+             * overlay so the menu still works. The soft-slot overlay is a
+             * separate HUD layer and always uses SDL primitives. */
+            if (imguiLive) {
+                Port_ImGui_SubmitDrawData();
+            } else {
                 Port_DebugMenu_Render(sRenderer, outW, outH);
             }
             Port_SoftSlots_RenderOverlay(sRenderer, outW, outH);
@@ -1910,6 +1998,9 @@ extern "C" void Port_PPU_Shutdown(void) {
         SDL_DestroySurface(sFrameSurface);
         sFrameSurface = nullptr;
     }
+    /* Joins the worker and drains anything in flight, so the renderer and
+     * these textures are this thread's alone from here on. */
+    Port_PresentThread_Stop();
     if (sLowResTexture) {
         SDL_DestroyTexture(sLowResTexture);
         sLowResTexture = nullptr;

@@ -4826,7 +4826,13 @@ static void DrawRandoFileMenuModal(void) {
     ImGui::End();
 }
 
-extern "C" bool Port_ImGui_Render(void) {
+/* Stage 1 of the SDL_Renderer path: run the whole menu/overlay frame and
+ * build its draw data. Touches no renderer, so it is safe to call while the
+ * present worker owns one -- which is the point: Port_PPU_PresentFrame needs
+ * to know whether an overlay wants to draw *before* it can choose between the
+ * threaded and synchronous present, and the only honest answer comes from
+ * building the frame and looking at what came out. */
+extern "C" bool Port_ImGui_BuildFrame(void) {
     if (!sImGuiInited)
         return false;
     /* SDL_Renderer path needs a renderer; SDL_GPU path runs with
@@ -5044,7 +5050,36 @@ extern "C" bool Port_ImGui_Render(void) {
         return true;
     }
 #endif
+    return true;
+}
+
+/* True when stage 1 produced something to draw. An empty frame is the normal
+ * case during gameplay in console mode: no menu, no toast, no modal, and the
+ * desktop-only corner trigger is not drawn -- which is exactly when the
+ * threaded present is both safe and worth having. */
+extern "C" bool Port_ImGui_HasDrawData(void) {
+    if (!sImGuiInited)
+        return false;
+    const ImDrawData* dd = ImGui::GetDrawData();
+    return dd != nullptr && dd->Valid && dd->CmdListsCount > 0 && dd->TotalVtxCount > 0;
+}
+
+/* Stage 2: hand the draw data to the renderer. Main thread only, and only on
+ * the synchronous present path. */
+extern "C" void Port_ImGui_SubmitDrawData(void) {
+    if (!sImGuiInited || sRenderer == nullptr)
+        return;
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), sRenderer);
+}
+
+extern "C" bool Port_ImGui_Render(void) {
+    if (!Port_ImGui_BuildFrame())
+        return false;
+#ifdef TMC_GPU_RENDERER
+    if (sRenderer == nullptr)
+        return true; /* GPU path consumes the draw data itself */
+#endif
+    Port_ImGui_SubmitDrawData();
     return true;
 }
 

@@ -60,6 +60,9 @@ u64 Port_Config_TickTimeNs(void);
 bool Port_Config_GetDecoupleRender(void);
 u32 Port_Config_FastForwardFps(void);   /* present cadence during fast-forward, Hz (5..240) */
 bool Port_Config_GetVsyncLockTicks(void);
+/* "present_thread": blit the window on a worker thread instead of the game
+ * thread. TMC_PRESENT_THREAD=<0|1> overrides for one session. */
+bool Port_Config_GetPresentThread(void);
 void Port_Config_SetDecoupleRender(bool on);
 bool Port_Config_GetShowFps(void);
 void Port_Config_SetShowFps(bool on);

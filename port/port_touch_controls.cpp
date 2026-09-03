@@ -749,6 +749,10 @@ extern "C" bool Port_TouchControls_InputPressed(PortInput input) {
     return input >= 0 && input < PORT_INPUT_COUNT && sHeld[input];
 }
 
+extern "C" bool Port_TouchControls_IsVisible(void) {
+    return sVisible;
+}
+
 extern "C" void Port_TouchControls_Render(SDL_Renderer* renderer, int windowWidth, int windowHeight) {
     Port_TouchControls_NotifyRenderSize(windowWidth, windowHeight);
     UpdateHeldState();
@@ -791,6 +795,10 @@ extern "C" void Port_TouchControls_SetGamepadAvailable(bool) {
 extern "C" bool Port_TouchControls_InputPressed(PortInput) {
     return false;
 }
+extern "C" bool Port_TouchControls_IsVisible(void) {
+    return false;
+}
+
 extern "C" void Port_TouchControls_Render(SDL_Renderer*, int, int) {
 }
 extern "C" bool Port_TouchControls_ConsumeSettingsRequest(void) {

@@ -32,6 +32,16 @@ bool Port_ImGui_QuitConfirmed(void);
 void Port_ImGui_RequestQuitModal(void);
 
 bool Port_ImGui_Render(void);
+
+/* Port_ImGui_Render split in two, for the threaded present path. BuildFrame
+ * runs the menu and produces draw data without touching the renderer;
+ * HasDrawData says whether anything came out; SubmitDrawData hands it to the
+ * renderer and is main-thread-only. Render() is the two of them together and
+ * remains the right call for anyone presenting synchronously. */
+bool Port_ImGui_BuildFrame(void);
+bool Port_ImGui_HasDrawData(void);
+void Port_ImGui_SubmitDrawData(void);
+
 bool Port_ImGui_RenderPrelaunch(bool romPresent,
                                 const char* version,
                                 const char* romName,

@@ -79,6 +79,8 @@ bool Port_SoftSlots_ConfigHandleKey(int sdlKey);
 /* Render hook: called once per frame from port_ppu.cpp. Renders the
  * configuration overlay (modal) when open. No-op otherwise. */
 void Port_SoftSlots_RenderOverlay(void* sdl_renderer, int winW, int winH);
+/* True while the overlay wants to draw. See the definition for why. */
+bool Port_SoftSlots_OverlayVisible(void);
 
 /* (Earlier iterations had Port_SoftSlots_DrawInfoIntoFramebuffer and
  *  Port_SoftSlots_PushBadge here for native pause-menu visuals. They

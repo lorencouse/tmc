@@ -14,6 +14,9 @@ void Port_TouchControls_NotifyGamepadUsed(void);
 void Port_TouchControls_SetGamepadAvailable(bool available);
 bool Port_TouchControls_InputPressed(PortInput input);
 void Port_TouchControls_Render(SDL_Renderer* renderer, int windowWidth, int windowHeight);
+/* True while the on-screen pad is drawn. Always false where touch controls
+ * are compiled out. */
+bool Port_TouchControls_IsVisible(void);
 
 bool Port_TouchControls_ConsumeSettingsRequest(void);
 

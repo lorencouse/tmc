@@ -29,6 +29,8 @@
  */
 
 #include "port_softslots.h"
+
+#include <stdbool.h>
 #include "port_runtime_config.h"
 
 #include <SDL3/SDL.h>
@@ -370,6 +372,14 @@ static void RenderConfigOverlay(SDL_Renderer* r, int winW, int winH) {
     int footLen = (int)SDL_strlen(foot);
     SDL_RenderDebugText(r, box.x + (box.w - footLen * charW) * 0.5f,
                         box.y + box.h - 18.0f, foot);
+}
+
+/* Does the soft-slot layer want the renderer this frame? Asked by the PPU
+ * before it chooses a threaded present -- an overlay draws through the same
+ * renderer the present worker owns, so a visible one forces the synchronous
+ * path. */
+bool Port_SoftSlots_OverlayVisible(void) {
+    return sConfigOpen != 0;
 }
 
 void Port_SoftSlots_RenderOverlay(void* sdl_renderer, int winW, int winH) {

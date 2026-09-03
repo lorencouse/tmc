@@ -78,6 +78,11 @@ int sFastForwardFps = 60;
 /* Re-seat the tick grid on each vsync-blocked present when the display refresh
  * equals the tick rate (see the decoupled pacer in port_bios.c). */
 bool sVsyncLockTicks = false; /* opt-in: right only when the present really blocks on a refresh at the tick rate */
+/* Opt-in: move the window blit to its own thread. Worth it only where the
+ * present is expensive AND blocking -- an X socket with no MIT-SHM, where it
+ * costs 5-17 ms on the game thread. Where the present is already cheap, the
+ * staging copy it adds is a small net loss. See port_present_thread.h. */
+bool sPresentThread = false;
 std::string sUpscaleMethod = "nearest";
 u64 sFrameTimeNs = 1000000000ULL / 60; /* 60 FPS cap by default (VSync-effective); see kDefaultFrameTimeNs */
 bool sPortSettingsMenuEnabled = true;
@@ -278,6 +283,7 @@ const BoolCfg kBoolCfg[] = {
     { "console_parity", &sConsoleParity, false },
     { "decouple_render", &sDecoupleRender, true },
     { "vsync_lock_ticks", &sVsyncLockTicks, false },
+    { "present_thread", &sPresentThread, false },
     { "show_fps", &sShowFps, false },
     { "tts_enabled", &sTtsEnabled, true },
     { "a11y_cues", &sA11yCues, true },
@@ -797,6 +803,20 @@ extern "C" u32 Port_Config_FastForwardFps(void) {
         v = 240;
     return (u32)v;
 }
+extern "C" bool Port_Config_GetPresentThread(void) {
+    /* TMC_PRESENT_THREAD=<0|1> overrides for one session, so a device can be
+     * A/B'd without rewriting config.json between runs. */
+    static int sEnv = -1; /* -1 unread, 2 unset, else 0/1 */
+    if (sEnv < 0) {
+        const char* e = getenv("TMC_PRESENT_THREAD");
+        sEnv = (e && *e) ? (atoi(e) != 0 ? 1 : 0) : 2;
+    }
+    if (sEnv != 2) {
+        return sEnv == 1;
+    }
+    return sPresentThread;
+}
+
 extern "C" bool Port_Config_GetVsyncLockTicks(void) {
     return sVsyncLockTicks;
 }
