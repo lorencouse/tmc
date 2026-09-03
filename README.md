@@ -157,13 +157,23 @@ single-target invocation, and other build options.
 | Toggle text-to-speech          | F7               | —              |
 | Open debug menu                | F8               | —              |
 | Capture bug report             | F9               | —              |
-| Quicksave                      | F5               | —              |
-| Quickload (also stops speech)  | F6               | —              |
+| Save state (selected slot)     | F5               | unbound        |
+| Load state (also stops speech) | F6               | unbound        |
+| State slot: next / previous    | PgDn / PgUp      | unbound        |
+| Load state slot 2-5 directly   | F1-F4 (Shift=save) | —            |
 | Roll attack macro              | D                | R3 (RS click)  |
 
 Hold a direction, then press the roll-attack bind for a start-of-roll sword
 attack (uses your best sword regardless of A/B equip). Toggle in **F8 →
 Controls**. Rebindable there.
+
+There are five manual state slots plus a three-deep auto-save ring. The four
+save-state actions above act on whichever manual slot is **selected**, so four
+bindings reach all five slots — pick the slot in **F8 → Saves**, or walk it
+with the next/previous binds. The selection persists in `config.json`
+(`savestate_slot`). All four are in the **F8 → Controls** binding table and
+default to no gamepad button: on a handheld every pad button is already
+gameplay, so the choice is yours rather than one being taken silently.
 
 The **F8** debug menu also covers warp, items, heal, internal render scale,
 the renderer/shader toggles (see *Renderer & shaders*) and an Accessibility tab

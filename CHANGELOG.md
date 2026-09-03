@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Save states are now rebindable, and reachable without a keyboard.** Four
+  new bindable actions — save state, load state, next slot, previous slot —
+  join the **F8 → Controls** table, so they can go on a gamepad button or any
+  key. They act on a *selected* manual slot rather than a fixed one, which is
+  what lets four bindings reach all five manual slots; handhelds do not have
+  ten spare buttons. The selection is set in **F8 → Saves** (a radio column,
+  which also now labels the slots 1-5 instead of "Quick" plus 1-4), moved by
+  the next/previous binds, and persisted as `savestate_slot` in `config.json`.
+  Keyboard defaults are unchanged (F5 save, F6 load) with PgDn/PgUp added for
+  the slot cursor; there are deliberately no gamepad defaults.
+- F5/F6 were previously hard-wired cases in the event loop, so rebinding them
+  would have left a second handler behind. They are now just the default
+  bindings of the new actions, and rebinding actually frees the key. The auto
+  ring (slots 6-8) stays load-only — it overwrites itself on a schedule, so a
+  hand-made state parked there would silently vanish.
+
 ## v0.8.3 (2026-07-19)
 
 ### Fixed

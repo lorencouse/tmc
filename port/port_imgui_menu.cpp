@@ -453,6 +453,9 @@ int Port_QuickSave_AutoEnabled(void);
 void Port_QuickSave_SetAutoEnabled(int enabled);
 unsigned int Port_QuickSave_AutoIntervalMs(void);
 void Port_QuickSave_SetAutoIntervalMs(unsigned int ms);
+int Port_QuickSave_ManualSlotCount(void);
+int Port_QuickSave_SelectedSlot(void);
+void Port_QuickSave_SetSelectedSlot(int slot);
 bool Port_Config_AutosaveEnabled(void);
 void Port_Config_SetAutosaveEnabled(bool enabled);
 void Port_Config_SetAutosaveIntervalMs(unsigned int ms);
@@ -924,6 +927,30 @@ static bool DrawRegionLanguageControls(bool prelaunch) {
     return regionChanged;
 }
 
+/* "F5" / "Pad: A, F5" / "unbound" — a one-line summary of everything bound
+ * to an action, for surfaces that want to show a hotkey without duplicating
+ * the Controls tab's per-binding widgets. Uses the same accessors the
+ * Controls table does, so it never disagrees with it. */
+static void DescribeBindings(PortInput input, char* out, size_t cap) {
+    if (!out || cap == 0)
+        return;
+    out[0] = '\0';
+    const int n = Port_Config_BindingCount(input);
+    size_t used = 0;
+    for (int i = 0; i < n; ++i) {
+        char label[64];
+        Port_Config_BindingLabel(input, i, label, sizeof(label));
+        if (!label[0])
+            continue;
+        const int wrote = std::snprintf(out + used, cap - used, "%s%s", used ? ", " : "", label);
+        if (wrote <= 0 || (size_t)wrote >= cap - used)
+            break;
+        used += (size_t)wrote;
+    }
+    if (!out[0])
+        std::snprintf(out, cap, "unbound");
+}
+
 static void DrawRibbonSavesTab(void) {
     /* Quit-to-title actions at the top of the tab — high-visibility
      * because the existing pause menu doesn't expose them. */
@@ -1001,10 +1028,25 @@ static void DrawRibbonSavesTab(void) {
     }
     ImGui::Separator();
 
-    /* Slot grid: each slot is one row with Save / Load buttons + timestamp. */
+    /* Slot grid: each slot is one row with Save / Load buttons + timestamp.
+     * The radio column picks the *selected* slot -- the one the bindable
+     * save-state buttons act on, so a player can drive all five from the
+     * pad without ever opening this menu again. */
     const int n = Port_QuickSave_SlotCount();
     const int autoBase = Port_QuickSave_AutoSlotBase();
-    if (ImGui::BeginTable("##quicksaves_table", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
+    const int selected = Port_QuickSave_SelectedSlot();
+
+    {
+        char save[96], load[96];
+        DescribeBindings(PORT_INPUT_STATE_SAVE, save, sizeof(save));
+        DescribeBindings(PORT_INPUT_STATE_LOAD, load, sizeof(load));
+        ImGui::Text("Selected slot: %d", selected + 1);
+        ImGui::TextDisabled("Save: %s     Load: %s", save, load);
+        ImGui::TextDisabled("Rebind these in the Controls tab; they always act on the slot above.");
+    }
+
+    if (ImGui::BeginTable("##quicksaves_table", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Use", ImGuiTableColumnFlags_WidthFixed, 40.0f);
         ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 140.0f);
         ImGui::TableSetupColumn("Timestamp", ImGuiTableColumnFlags_WidthStretch);
@@ -1013,23 +1055,25 @@ static void DrawRibbonSavesTab(void) {
             ImGui::PushID(s);
             ImGui::TableNextRow();
 
-            // Column 1: Slot name
+            // Column 0: selection radio (manual slots only -- the auto ring
+            // overwrites itself, so it is loadable but never "selected").
             ImGui::TableSetColumnIndex(0);
-            const char* tag;
-            char tagbuf[16];
-            if (s == 0)
-                tag = "Quick";
-            else if (s < autoBase) {
-                std::snprintf(tagbuf, sizeof(tagbuf), "Slot %d", s);
-                tag = tagbuf;
-            } else {
-                std::snprintf(tagbuf, sizeof(tagbuf), "Auto %d", s - autoBase + 1);
-                tag = tagbuf;
+            if (s < autoBase) {
+                if (ImGui::RadioButton("##sel", selected == s))
+                    Port_QuickSave_SetSelectedSlot(s);
             }
-            ImGui::Text("%s", tag);
+
+            // Column 1: Slot name
+            ImGui::TableSetColumnIndex(1);
+            char tagbuf[16];
+            if (s < autoBase)
+                std::snprintf(tagbuf, sizeof(tagbuf), "Slot %d", s + 1);
+            else
+                std::snprintf(tagbuf, sizeof(tagbuf), "Auto %d", s - autoBase + 1);
+            ImGui::Text("%s", tagbuf);
 
             // Column 2: Actions
-            ImGui::TableSetColumnIndex(1);
+            ImGui::TableSetColumnIndex(2);
             if (ImGui::Button("Save")) {
                 if (Port_QuickSave_SaveSlot(s))
                     Port_DebugMenu_ToastFromExternal("Saved");
@@ -1047,7 +1091,7 @@ static void DrawRibbonSavesTab(void) {
             }
 
             // Column 3: Timestamp
-            ImGui::TableSetColumnIndex(2);
+            ImGui::TableSetColumnIndex(3);
             unsigned long long ts = Port_QuickSave_SlotTimestamp(s);
             if (ts == 0) {
                 ImGui::TextDisabled("(empty)");
@@ -1228,6 +1272,14 @@ static const char* InputLabel(int input) {
             return "Soft slot R2";
         case PORT_INPUT_ROLL_ATTACK:
             return "Roll attack (D / R3)";
+        case PORT_INPUT_STATE_SAVE:
+            return "Save state (selected slot)";
+        case PORT_INPUT_STATE_LOAD:
+            return "Load state (selected slot)";
+        case PORT_INPUT_STATE_NEXT:
+            return "State slot: next";
+        case PORT_INPUT_STATE_PREV:
+            return "State slot: previous";
         default:
             return Port_Config_InputName((PortInput)input);
     }
@@ -1241,8 +1293,9 @@ static void DrawRibbonControlsTab(void) {
         };
         static const HotkeyRow kHotkeys[] = {
             { "F8", "Open / close this settings menu (gamepad: Select+Start)" },
-            { "F5 / F6", "Quicksave / quickload" },
-            { "F1-F4", "Load save-state slot 1-4  (Shift+Fn = save to slot)" },
+            { "F5 / F6", "Save / load the selected state slot (rebindable below)" },
+            { "PgDn / PgUp", "Next / previous state slot (rebindable below)" },
+            { "F1-F4", "Load save-state slot 2-5 directly  (Shift+Fn = save)" },
             { "F7", "Toggle text-to-speech" },
             { "F9", "Capture a bug report (screenshot + save + state)" },
             { "F10", "Speak nearby points of interest  (Shift: next, Ctrl: orient)" },
@@ -1266,7 +1319,10 @@ static void DrawRibbonControlsTab(void) {
             }
             ImGui::EndTable();
         }
-        ImGui::TextDisabled("Save-states (F1-F6) are disabled in Console-Parity mode.");
+        ImGui::TextDisabled("Save-states are disabled in Console-Parity mode.");
+        ImGui::TextWrapped("The four save-state actions are in the binding table below, so they "
+                           "can go on a pad button or any key -- a handheld has no F-keys to "
+                           "reach. They act on whichever slot is selected in the Saves tab.");
     }
 #ifdef __ANDROID__
     if (ImGui::CollapsingHeader("Touch controls", ImGuiTreeNodeFlags_DefaultOpen)) {

@@ -27,6 +27,13 @@
 #include <setjmp.h>
 #include "port_repro.h"
 
+/* Save-state selection API (port_quicksave.c has no header of its own; the
+ * rest of the tree extern-declares it at the use site the same way). */
+extern int Port_QuickSave_SelectedSlot(void);
+extern void Port_QuickSave_CycleSelectedSlot(int direction);
+extern int Port_QuickSave_SaveSelected(void);
+extern int Port_QuickSave_LoadSelected(void);
+
 static bool gQuitRequested = false;
 static bool sFastForward = false;
 static int sFrameNum = 0;
@@ -248,6 +255,46 @@ static void Port_PumpEvents(void) {
             }
             continue;
         }
+        /* Rebindable save-state hotkeys. These live outside the KEY_DOWN
+         * block below because they are the only hotkeys that must also work
+         * from a gamepad button -- on a handheld there is no keyboard to
+         * reach F5/F6 with. Port_Config_EventIsInputDown() matches key, pad
+         * button and trigger alike, so one call covers all three.
+         *
+         * Suppressed while the settings menu is up or a binding capture is
+         * running: otherwise the button you are in the middle of assigning
+         * fires the action it is being assigned to. Text fields (seed entry)
+         * are excluded for the same reason as the F-keys below. */
+        if (!Port_DebugMenu_IsOpen() && !Port_Config_IsCapturingBinding() && !Port_ImGui_WantsTextInput()) {
+            const bool wantsSave = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_SAVE);
+            const bool wantsLoad = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_LOAD);
+            const bool wantsNext = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_NEXT);
+            const bool wantsPrev = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_PREV);
+            if (wantsSave || wantsLoad || wantsNext || wantsPrev) {
+                char msg[64];
+                /* Same rule as the F-key path: Console-Parity makes every
+                 * save-state action inert, including the slot cursor, so a
+                 * run can't be quietly staged for a restore. */
+                if (Port_Config_GetConsoleParity()) {
+                    Port_DebugMenu_ToastFromExternal("Save-states disabled (Console-Parity)");
+                    continue;
+                }
+                if (wantsNext || wantsPrev) {
+                    Port_QuickSave_CycleSelectedSlot(wantsNext ? +1 : -1);
+                    snprintf(msg, sizeof(msg), "State slot %d", Port_QuickSave_SelectedSlot() + 1);
+                } else if (wantsSave) {
+                    const int slot = Port_QuickSave_SelectedSlot();
+                    const int ok = Port_QuickSave_SaveSelected();
+                    snprintf(msg, sizeof(msg), ok ? "Saved to slot %d" : "Slot %d save FAILED", slot + 1);
+                } else {
+                    const int slot = Port_QuickSave_SelectedSlot();
+                    const int ok = Port_QuickSave_LoadSelected();
+                    snprintf(msg, sizeof(msg), ok ? "Loaded slot %d" : "Slot %d is empty", slot + 1);
+                }
+                Port_DebugMenu_ToastFromExternal(msg);
+                continue;
+            }
+        }
         if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) {
             /* Soft-slot config overlay is highest priority: it consumes
              * navigation keys before the rest of the routing fires. */
@@ -347,22 +394,17 @@ static void Port_PumpEvents(void) {
             }
             /* Console-Parity mode makes every save-state hotkey inert —
              * save-states let a run restore arbitrary state mid-glitch, which
-             * has no hardware equivalent. Swallow F1-F6 here so neither save
-             * nor load fires. */
-            if ((e.key.key >= SDLK_F1 && e.key.key <= SDLK_F6) && Port_Config_GetConsoleParity()) {
+             * has no hardware equivalent. Swallow F1-F4 here so neither save
+             * nor load fires; the bindable actions are gated the same way
+             * further up. */
+            if ((e.key.key >= SDLK_F1 && e.key.key <= SDLK_F4) && Port_Config_GetConsoleParity()) {
                 Port_DebugMenu_ToastFromExternal("Save-states disabled (Console-Parity)");
                 continue;
             }
-            if (e.key.key == SDLK_F5) {
-                extern int Port_QuickSave(void);
-                Port_QuickSave();
-                continue;
-            }
-            if (e.key.key == SDLK_F6) {
-                extern int Port_QuickLoad(void);
-                Port_QuickLoad();
-                continue;
-            }
+            /* F5/F6 used to be hard-wired quicksave/quickload here. They are
+             * now the *default* bindings of PORT_INPUT_STATE_SAVE/_LOAD,
+             * handled above -- so rebinding them in the Controls tab actually
+             * frees the key instead of leaving a second handler behind. */
             /* F1..F4 — numbered save-state slots. Plain press = load,
              * Shift+Fn = save. Mirrors emulator-style hotkey conventions.
              * (Matheo's branch bound F1 to an InGameSettingsModal; we

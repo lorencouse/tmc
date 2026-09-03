@@ -31,6 +31,15 @@ typedef enum {
     PORT_INPUT_SOFT_R2,
     /* One-button roll attack (port_roll_attack_macro.c). Default keyboard D. */
     PORT_INPUT_ROLL_ATTACK,
+    /* Save-state hotkeys (port_bios.c event loop -> port_quicksave.c). These
+     * act on the *selected* slot rather than a fixed one, so four bindings
+     * reach all five manual slots -- handhelds rarely have ten spare buttons.
+     * Keyboard defaults keep the historical F5/F6; no pad default, because
+     * every pad button on a GBA-shaped device is already gameplay. */
+    PORT_INPUT_STATE_SAVE,
+    PORT_INPUT_STATE_LOAD,
+    PORT_INPUT_STATE_NEXT,
+    PORT_INPUT_STATE_PREV,
     PORT_INPUT_COUNT,
 } PortInput;
 
@@ -328,6 +337,19 @@ void Port_Config_TestForceEdge(PortInput input);
  * the per-frame edge cache so a sub-frame tap (pointer DOWN+UP in one poll
  * batch) still registers for one game frame. Same cache/wipe as above. */
 void Port_Config_StampInputEdge(PortInput input);
+
+/* True while the Controls tab is waiting for the user to press the input it
+ * should bind. Callers that act on bindings (the save-state hotkeys in
+ * port_bios.c) must stay inert during a capture. Defined in the .cpp
+ * alongside Port_Config_BeginCaptureBinding. */
+int Port_Config_IsCapturingBinding(void);
+
+/* Selected save-state slot, 0..Port_QuickSave_ManualSlotCount()-1. The
+ * STATE_SAVE / STATE_LOAD bindings act on this slot and STATE_NEXT /
+ * STATE_PREV move it; the Saves tab shows and sets it too. Persisted as
+ * savestate_slot in config.json so a session picks up where it left off. */
+int Port_Config_SaveStateSlot(void);
+void Port_Config_SetSaveStateSlot(int slot);
 
 int Port_Config_PreferredRegion(void);
 void Port_Config_SetPreferredRegion(int region);

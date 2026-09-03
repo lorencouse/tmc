@@ -6,9 +6,15 @@
  * `state_<slot>.bin` next to the binary so they survive restart.
  *
  * Slot layout:
- *   slot 0:    F5 quicksave / F6 quickload (legacy single-slot API)
- *   slot 1-4:  F1..F4 load,  Shift+F1..F4 save (numbered manual slots)
- *   slot 5-7:  auto-save ring (Port_QuickSave_Auto cycles through these)
+ *   slot 0-4:  manual slots. One of them is "selected" (persisted as
+ *              savestate_slot in config.json); the rebindable
+ *              PORT_INPUT_STATE_SAVE / _LOAD / _NEXT / _PREV actions act
+ *              on the selection, so four bindings reach all five slots.
+ *              Slot 0 doubles as the legacy single-slot quicksave API,
+ *              and F1..F4 still address slots 1-4 directly (Shift = save).
+ *   slot 5-7:  auto-save ring (Port_QuickSave_AutoTick cycles through
+ *              these). Not selectable — the ring would overwrite a
+ *              hand-made state parked there.
  *
  * File format (disk persistence):
  *   magic    "TMCS"                          (4 bytes)
@@ -723,6 +729,45 @@ u32 Port_QuickSave_AutoIntervalMs(void) {
 
 int Port_QuickSave_SlotCount(void) {
     return NUM_SLOTS;
+}
+
+/* Manual slots are 0..AUTO_SLOT_BASE-1. The auto ring above them is
+ * excluded from everything the user selects: the ring cursor overwrites
+ * those slots on its own schedule, so parking a hand-made state there
+ * would silently lose it. They stay loadable from the Saves tab. */
+int Port_QuickSave_ManualSlotCount(void) {
+    return AUTO_SLOT_BASE;
+}
+
+int Port_QuickSave_SelectedSlot(void) {
+    int slot = Port_Config_SaveStateSlot();
+    if (slot < 0 || slot >= AUTO_SLOT_BASE)
+        slot = 0;
+    return slot;
+}
+
+void Port_QuickSave_SetSelectedSlot(int slot) {
+    if (slot < 0 || slot >= AUTO_SLOT_BASE)
+        return;
+    Port_Config_SetSaveStateSlot(slot);
+}
+
+/* Wraps at both ends so a single bound button can walk the whole ring. */
+void Port_QuickSave_CycleSelectedSlot(int direction) {
+    int slot = Port_QuickSave_SelectedSlot() + (direction >= 0 ? 1 : -1);
+    if (slot < 0)
+        slot = AUTO_SLOT_BASE - 1;
+    else if (slot >= AUTO_SLOT_BASE)
+        slot = 0;
+    Port_Config_SetSaveStateSlot(slot);
+}
+
+int Port_QuickSave_SaveSelected(void) {
+    return Port_QuickSave_SaveSlot(Port_QuickSave_SelectedSlot());
+}
+
+int Port_QuickSave_LoadSelected(void) {
+    return Port_QuickSave_LoadSlot(Port_QuickSave_SelectedSlot());
 }
 int Port_QuickSave_AutoSlotBase(void) {
     return AUTO_SLOT_BASE;

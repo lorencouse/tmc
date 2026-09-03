@@ -53,6 +53,15 @@ const std::array<Def, PORT_INPUT_COUNT> kDefaults = { {
     /* Roll attack: keyboard D + R3 (right stick click). R3 is unused by the
      * base game and sits near the movement stick for a direction+macro press. */
     { PORT_INPUT_ROLL_ATTACK, "roll_attack", { "SDLK:0x00000064", "SDL_GAMEPAD:0x00000008" } },
+    /* Save-states. F5/F6 are the historical quicksave/quickload keys and stay
+     * the defaults, now as rebindable actions rather than hard-wired cases in
+     * port_bios.c. PageUp/PageDown move the selected slot. Deliberately no
+     * pad defaults: on a GBA-shaped handheld every pad button is gameplay, so
+     * the user picks (Controls tab) rather than losing one silently. */
+    { PORT_INPUT_STATE_SAVE, "state_save", { "SDLK:0x4000003e" } },
+    { PORT_INPUT_STATE_LOAD, "state_load", { "SDLK:0x4000003f" } },
+    { PORT_INPUT_STATE_NEXT, "state_next_slot", { "SDLK:0x4000004e" } },
+    { PORT_INPUT_STATE_PREV, "state_prev_slot", { "SDLK:0x4000004b" } },
 } };
 
 u8 sScale = 3;
@@ -70,6 +79,7 @@ std::string sActiveSaveProfile = "tmc.sav";
  * back to a save point first. */
 bool sAutosaveEnabled = true;
 u32 sAutosaveIntervalMs = 60000;
+int sSaveStateSlot = 0;
 /* Touch input scheme from matheo's launcher integration — kept for
  * Android compatibility. */
 PortTouchScheme sTouchScheme = PORT_TOUCH_SCHEME_JOYSTICK;
@@ -296,6 +306,7 @@ const IntCfg kIntCfg[] = {
     { "rando_item_pool", &sRandoItemPool, 0 },          { "rando_tunic_color", &sRandoTunicColor, 0 },
     { "rando_heart_color", &sRandoHeartColor, 0 },      { "rando_tricks", &sRandoTricks, 0 },
     { "rando_accessibility", &sRandoAccessibility, 0 },
+    { "savestate_slot", &sSaveStateSlot, 0 },
 };
 const StrCfg kStrCfg[] = {
     { "upscale_method", &sUpscaleMethod, "nearest" },
@@ -801,6 +812,18 @@ extern "C" bool Port_Config_AutosaveEnabled(void) {
 extern "C" void Port_Config_SetAutosaveEnabled(bool enabled) {
     sAutosaveEnabled = enabled;
     sConfigJson["autosave_enabled"] = enabled;
+    SaveConfig();
+}
+
+extern "C" int Port_Config_SaveStateSlot(void) {
+    return sSaveStateSlot;
+}
+
+extern "C" void Port_Config_SetSaveStateSlot(int slot) {
+    if (slot == sSaveStateSlot)
+        return;
+    sSaveStateSlot = slot;
+    sConfigJson["savestate_slot"] = slot;
     SaveConfig();
 }
 
