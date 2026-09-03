@@ -940,6 +940,26 @@ target("tmc_pc")
         -- WriteBacktraceWindows() for symbol resolution in the crash handler.
         add_syslinks("winhttp", "winpthread", "dbghelp")
     end
+
+    -- Statically link the C++ runtime on Linux, for the handheld ports.
+    --
+    -- Built on ubuntu-22.04 the binary picks up GLIBCXX_3.4.30 (GCC 12),
+    -- a higher libstdc++ floor than any retro-handheld CFW ships, so the
+    -- aarch64 build fails to load on most of them even where the CPU is
+    -- fine. Nothing here needs a shared libstdc++: SDL3 is static, and
+    -- libpng/zlib are C. Linking it in costs a few MB of binary and
+    -- removes the floor entirely.
+    --
+    -- `linux` only -- `android` is a separate xmake plat and links
+    -- libmain.so through shflags, and the mingw paths above already do
+    -- their own -static.
+    --
+    -- The glibc floor is a separate problem with a separate fix (the
+    -- build container's glibc version); this addresses libstdc++ only.
+    -- libgomp is still dynamic; see the OpenMP notes below.
+    if is_plat("linux") then
+        add_ldflags("-static-libstdc++", "-static-libgcc", {force = true})
+    end
     
     -- Math library
     if is_plat("linux", "macosx") then

@@ -47,32 +47,44 @@ jobs:
           # Use Ubuntu 22.04 (glibc 2.35) so the Linux binary runs on
           # older distros — Nobara 43, Fedora 43, Kubuntu 25.10. Building
           # on ubuntu-latest pins glibc 2.43+ which excludes most users.
-          linux='{"runner":"ubuntu-22.04","os_name":"linux","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor"}'
-          # Linux ARM64 (aarch64) via GitHub's native arm64 runner. Same
-          # ubuntu-22.04 glibc-2.35 baseline as x86_64. In "all": the
-          # C/C++ is ARM-clean (macOS arm64 already ships) and the apt +
-          # build.py path is arch-neutral on a native runner.
-          linux_arm='{"runner":"ubuntu-22.04-arm","os_name":"linux","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor"}'
+          linux='{"runner":"ubuntu-22.04","os_name":"linux","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":""}'
+          # Linux ARM64 (aarch64) via GitHub's native arm64 runner, built
+          # inside a Debian bullseye container.
+          #
+          # The container is the whole point of this leg. Retro handhelds
+          # are the aarch64 audience, and their CFW ship old glibc: the
+          # highest min_glibc across PortMaster's ~1,400-entry catalogue
+          # is 2.32, while ubuntu-22.04 produces a binary needing 2.34.
+          # That excludes ArkOS and friends outright — the binary will not
+          # load, whatever the CPU can do. bullseye is glibc 2.31, which
+          # clears the whole catalogue.
+          #
+          # bullseye's stock GCC 10 is enough: the only C++20 in the tree
+          # is <span> and <numbers>, both of which libstdc++ 10 has. No
+          # concepts, ranges, format or coroutines, so no LLVM backport
+          # is needed. The runner stays the native arm64 one — this is a
+          # container, not a cross-compile.
+          linux_arm='{"runner":"ubuntu-22.04-arm","os_name":"linux","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"debian:bullseye","glibc_max":"2.31"}'
           # Pin to windows-2022: GitHub rolled `windows-latest` to Server
           # 2025 with a different VS/MinGW tooling layout, which broke
           # xmake-repo's libpng install step (exit 127 at the post-compile
           # install). The v0.1.6.x release built fine on windows-2022.
-          windows='{"runner":"windows-2022","os_name":"windows","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe"}'
+          windows='{"runner":"windows-2022","os_name":"windows","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe","container":"","glibc_max":""}'
           # Windows ARM64 (aarch64) via the native windows-11-arm runner +
           # llvm-mingw (dedicated install step). In "all": validated green
           # (the x86 MinGW path — choco gcc, -mno-ms-bitfields, libgomp —
           # doesn't apply, so it uses aarch64 clang + -static; OpenMP is
           # degraded to serial there). Also reachable via os_filter
           # windows-arm or arm.
-          windows_arm='{"runner":"windows-11-arm","os_name":"windows","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe"}'
+          windows_arm='{"runner":"windows-11-arm","os_name":"windows","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc.exe","extractor_name":"asset_extractor.exe","container":"","glibc_max":""}'
           # macos-14 = Apple Silicon arm64; macos-15-intel = Intel x86_64.
           # Use the explicit Intel label: older Intel image aliases can remain
           # queued indefinitely once GitHub-hosted runner capacity/labels move.
           # Both keep os_name="macos" so the brew dep-install step's condition
           # (`matrix.os_name == 'macos'`) covers both runners. Archive name uses
           # ${matrix.arch} to disambiguate the assets.
-          macos_arm='{"runner":"macos-14","os_name":"macos","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor"}'
-          macos_x86='{"runner":"macos-15-intel","os_name":"macos","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor"}'
+          macos_arm='{"runner":"macos-14","os_name":"macos","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":""}'
+          macos_x86='{"runner":"macos-15-intel","os_name":"macos","arch":"x86_64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"","glibc_max":""}'
           # Full release/CI coverage is six native hosted targets:
           #   x86_64: Linux, Windows, macOS Intel
           #   arm64:  Linux, Windows, macOS Apple Silicon
@@ -104,10 +116,47 @@ jobs:
     needs: set-matrix
     if: needs.set-matrix.outputs.desktop == 'true'
     runs-on: ${{ matrix.runner }}
+    # Empty string means "run directly on the runner", which is every leg
+    # but linux-arm64. Only that one builds in a container, to pin an old
+    # glibc for the handheld CFW (see the matrix comment above).
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.set-matrix.outputs.matrix) }}
     steps:
+      # Must be the first step: actions/checkout and the manual submodule
+      # step below both need git, and a bare debian image has neither git
+      # nor curl nor python3. Runs before any checkout, so it cannot use
+      # anything from the repo.
+      #
+      # Debian 11 left LTS in August 2026, at which point its packages
+      # move from deb.debian.org to archive.debian.org. Which of the two
+      # is live depends on when this runs, so try the configured mirror
+      # first and fall back to the archive (with Check-Valid-Until off —
+      # archived Release files are deliberately stale).
+      - name: Bootstrap container
+        if: ${{ matrix.container != '' }}
+        shell: bash
+        run: |
+          set -eux
+          if ! apt-get update; then
+            echo "::warning::deb.debian.org failed for bullseye — falling back to archive.debian.org"
+            printf '%s\n' \
+              'deb http://archive.debian.org/debian bullseye main' \
+              'deb http://archive.debian.org/debian bullseye-updates main' \
+              'deb http://archive.debian.org/debian-security bullseye-security main' \
+              > /etc/apt/sources.list
+            echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
+            apt-get update
+          fi
+          apt-get install -y --no-install-recommends \
+            git ca-certificates curl wget sudo xz-utils unzip zip \
+            python3 python3-pip build-essential pkg-config
+          git --version && python3 --version && gcc --version | head -1
+          # actions/checkout runs as root here while the workspace may be
+          # owned by another uid; without this git refuses to touch it.
+          git config --global --add safe.directory '*'
+
       - name: Disable CRLF conversion
         shell: bash
         run: |
@@ -167,7 +216,30 @@ jobs:
       - name: Install Linux dependencies
         if: ${{ matrix.os_name == 'linux' }}
         run: |
-          sudo apt-get update
+          # Root in the bullseye container (no sudo binary in the base
+          # image until Bootstrap installed one); an unprivileged user on
+          # the hosted runners.
+          SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
+
+          # SDL3 requires pipewire >= 0.3.20 to compile its pipewire audio
+          # backend in, and bullseye ships 0.3.19 — one release short. The
+          # "Verify SDL3 audio backends" step below hard-fails on a missing
+          # pipewire backend, and this port's launcher asks for
+          # SDL_AUDIODRIVER=pipewire by name, so 0.3.19 is not good enough.
+          # bullseye-backports carries 0.3.65. Enabling backports pulls only
+          # what is explicitly requested from it (default pin priority 100),
+          # so the rest of the build stays on bullseye's glibc-2.31 stack.
+          if [ -f /etc/debian_version ] && grep -q '^11' /etc/debian_version; then
+            echo 'deb http://deb.debian.org/debian bullseye-backports main' \
+              > /etc/apt/sources.list.d/backports.list
+            apt-get update || {
+              echo "::warning::bullseye-backports unavailable — trying the archive"
+              echo 'deb http://archive.debian.org/debian bullseye-backports main' \
+                > /etc/apt/sources.list.d/backports.list
+              apt-get update || rm -f /etc/apt/sources.list.d/backports.list
+            }
+          fi
+          $SUDO apt-get update
           # libasound2-dev / libpulse-dev / libpipewire-0.3-dev: needed
           # for SDL3 to compile in alsa + pulseaudio + pipewire audio
           # backends. The 'Verify SDL3 audio backends' step at the end
@@ -177,18 +249,26 @@ jobs:
           # (also the xmake default), so tmc_pc links -lEGL -lGLESv2 for the
           # GLES compute PPU rasterizer on Linux (xmake.lua guard). Without the
           # -dev symlinks the link fails with "cannot find -lEGL".
-          sudo apt-get install -y \
+          $SUDO apt-get install -y \
             curl libpng-dev libfmt-dev nlohmann-json3-dev \
             libx11-dev libxext-dev libxrender-dev libxcursor-dev \
-            libasound2-dev libpulse-dev libpipewire-0.3-dev \
+            libasound2-dev libpulse-dev \
             xutils-dev xorg-dev autoconf automake libtool ninja-build python3-pip \
-            libegl-dev libgles-dev
+            libegl-dev libgles-dev cmake
+          # pipewire headers: prefer backports where it exists (see above),
+          # otherwise whatever the release ships.
+          if [ -f /etc/apt/sources.list.d/backports.list ]; then
+            $SUDO apt-get install -y -t bullseye-backports libpipewire-0.3-dev
+          else
+            $SUDO apt-get install -y libpipewire-0.3-dev
+          fi
+          pkg-config --modversion libpipewire-0.3 || true
           # Ubuntu 22.04 ships meson 0.61.2, but Wayland 1.25.0 (pulled
           # in transitively by xmake's SDL3 dep chain) needs >= 0.64.
           # Install a newer meson via pip ahead of xmake so the package
           # build doesn't fail with "Meson version is 0.61.2 but project
           # requires >= 0.64.0".
-          sudo pip3 install --upgrade 'meson>=1.4'
+          $SUDO pip3 install --upgrade 'meson>=1.4'
 
       - name: Install macOS dependencies
         if: matrix.os_name == 'macos'
@@ -542,6 +622,67 @@ jobs:
             exit 1
           fi
           echo "OK: SDL3 has alsa + pulseaudio + pipewire compiled in."
+
+      # The other half of "will this actually run on the target device".
+      # The audio gate above proves the binary can make sound; this proves
+      # the loader will accept it at all.
+      #
+      # Handheld CFW are the aarch64 audience and they ship old runtimes,
+      # so the arm64 leg carries a hard ceiling (matrix.glibc_max) and
+      # fails the build when the produced binary needs anything newer.
+      # Without a gate here the floor drifts up silently the next time a
+      # dependency or base image moves, and the failure surfaces as a
+      # player's "it does nothing when I launch it" months later.
+      # x86_64 has no ceiling and only reports.
+      - name: Report the runtime ABI floor of tmc_pc (Linux)
+        if: matrix.os_name == 'linux'
+        shell: bash
+        env:
+          GLIBC_MAX: ${{ matrix.glibc_max }}
+        run: |
+          set -uo pipefail
+          BIN="build/pc/${{ matrix.exe_name }}"
+          test -f "$BIN"
+
+          echo "== NEEDED =="
+          objdump -p "$BIN" | awk '/NEEDED/ {print "  " $2}'
+
+          # Versioned symbol references, highest per soname. sort -V so
+          # 2.9 does not outrank 2.17.
+          glibc_need="$(objdump -T "$BIN" \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | sort -uV | tail -1)"
+          cxx_need="$(objdump -T "$BIN" \
+            | grep -oE '(GLIBCXX|CXXABI)_[0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | sort -uV | tail -1)"
+          echo "== floors =="
+          echo "  glibc:     ${glibc_need:-none}"
+          echo "  libstdc++: ${cxx_need:-none (statically linked)}"
+
+          rc=0
+
+          # xmake.lua links -static-libstdc++ -static-libgcc on Linux
+          # precisely so this is empty. If a GLIBCXX_/CXXABI_ reference is
+          # back, that flag stopped taking effect and the libstdc++ floor
+          # has silently returned.
+          if [ -n "$cxx_need" ]; then
+            echo "::error::tmc_pc references $cxx_need — libstdc++ is dynamically linked again."
+            echo "  -static-libstdc++ in xmake.lua is not reaching the link."
+            rc=1
+          fi
+
+          if [ -n "${GLIBC_MAX:-}" ]; then
+            have="${glibc_need#GLIBC_}"
+            worst="$(printf '%s\n%s\n' "$have" "$GLIBC_MAX" | sort -V | tail -1)"
+            if [ "$worst" != "$GLIBC_MAX" ]; then
+              echo "::error::tmc_pc needs glibc $have, above this target's $GLIBC_MAX ceiling."
+              echo "  Devices on older CFW will fail to load it. Check the build container."
+              rc=1
+            else
+              echo "OK: glibc $have is within the $GLIBC_MAX ceiling."
+            fi
+          fi
+          exit "$rc"
 
       - name: Build and run rando_logic_test (Linux x86_64)
         if: matrix.os_name == 'linux' && matrix.arch == 'x86_64'
