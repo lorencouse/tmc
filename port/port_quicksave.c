@@ -6,13 +6,16 @@
  * `state_<slot>.bin` next to the binary so they survive restart.
  *
  * Slot layout:
- *   slot 0-4:  manual slots. One of them is "selected" (persisted as
+ *   slot 0-19: manual slots. One of them is "selected" (persisted as
  *              savestate_slot in config.json); the rebindable
  *              PORT_INPUT_STATE_SAVE / _LOAD / _NEXT / _PREV actions act
- *              on the selection, so four bindings reach all five slots.
+ *              on the selection, so a handful of bindings reach all of
+ *              them. "Save to a new slot" counts up and wraps back to the
+ *              first once all 20 are filled, so repeated presses leave a
+ *              rolling history rather than overwriting one state.
  *              Slot 0 doubles as the legacy single-slot quicksave API,
  *              and F1..F4 still address slots 1-4 directly (Shift = save).
- *   slot 5-7:  auto-save ring (Port_QuickSave_AutoTick cycles through
+ *   slot 20-22: auto-save ring (Port_QuickSave_AutoTick cycles through
  *              these). Not selectable — the ring would overwrite a
  *              hand-made state parked there.
  *
@@ -57,6 +60,7 @@
 #include "port_gba_mem.h"
 #include "port_runtime_config.h"
 #include "region.h" /* REGION_IS_EU/JP — per-region savestate isolation (#21) */
+#include "virtuappu.h" /* virtuappu_frame_buffer — slot thumbnails */
 
 extern u8 gEwram[];
 extern u8 gIwram[];
@@ -106,9 +110,14 @@ static StateRegion sRegions[] = {
 };
 
 #define NUM_REGIONS (sizeof(sRegions) / sizeof(sRegions[0]))
-#define NUM_SLOTS 8 /* 0..4 manual + 5..7 auto-save ring */
-#define AUTO_SLOT_BASE 5
+/* 20 manual slots. A rolling quick-save is only worth as much as how far
+ * back it lets you rewind, and the cost here is small: ~409 KB of state plus
+ * a 38 KB thumbnail per slot, so a full set is ~9 MB on a card with tens of
+ * gigabytes free. Change this one constant to resize the ring. */
+#define NUM_MANUAL_SLOTS 20
 #define NUM_AUTO_SLOTS 3
+#define AUTO_SLOT_BASE NUM_MANUAL_SLOTS
+#define NUM_SLOTS (NUM_MANUAL_SLOTS + NUM_AUTO_SLOTS)
 #define MAGIC 0x53434D54u /* "TMCS" little-endian */
 #define VERSION                                         \
     6u /* v2: header carries gEntities base address for \
@@ -130,6 +139,26 @@ typedef struct {
     u64 saved_at_unix;       /* clock_gettime CLOCK_REALTIME seconds */
     u64 saved_entities_base; /* gEntities address at save time; 0 for in-RAM slots */
 } Slot;
+
+/* Slot thumbnails. A save-state picker is unusable without them -- five
+ * timestamps tell you nothing about which one is the fight you wanted. Half
+ * the GBA frame (240x160 -> 120x80) by nearest sampling, which for pixel art
+ * is exact 2x1:1 decimation rather than a resample.
+ *
+ * Static rather than heap: AGENTS.md asks for fixed pools over allocation in
+ * frame paths, and 8 x 120x80x4 is 300 KB against a 400 KB snapshot per slot.
+ * RGBA8 byte order matches both virtuappu_frame_buffer (ABGR LE, so byte 0 is
+ * R) and ImTextureFormat_RGBA32, so the copy only has to force alpha. */
+#define THUMB_W 120
+#define THUMB_H 80
+#define THUMB_BYTES (THUMB_W * THUMB_H * 4)
+#define THUMB_MAGIC 0x54434D54u /* "TMCT" little-endian */
+
+static u8 sThumbs[NUM_SLOTS][THUMB_BYTES];
+static int sThumbValid[NUM_SLOTS];
+/* Bumped whenever a slot's thumbnail changes, so the menu can tell that its
+ * cached GPU texture is stale without comparing 38 KB of pixels. */
+static u32 sThumbGeneration[NUM_SLOTS];
 
 static Slot sSlots[NUM_SLOTS];
 static int sAutoNextSlot = AUTO_SLOT_BASE; /* round-robin cursor */
@@ -392,6 +421,81 @@ static void SlotFilename(int slot, char* out, size_t cap) {
     }
 }
 
+/* Framebuffer stride is the build's frame width, not the buffer's max width
+ * -- reading at the wrong stride shears the capture. Same rule as
+ * port_bugreport.cpp's kFrameW. */
+#define FB_STRIDE MODE1_GBA_WIDTH
+
+/* Grab the frame that is on screen right now into the slot's thumbnail.
+ * Called from the save path, so it runs once per save, not per frame. */
+static void CaptureThumbnail(int slot) {
+    if (slot < 0 || slot >= NUM_SLOTS)
+        return;
+    u8* dst = sThumbs[slot];
+    for (int y = 0; y < THUMB_H; ++y) {
+        const u32* src = &virtuappu_frame_buffer[(y * 2) * FB_STRIDE];
+        for (int x = 0; x < THUMB_W; ++x) {
+            const u32 px = src[x * 2];
+            *dst++ = (u8)(px & 0xFF);         /* R (ABGR LE: byte 0 is R) */
+            *dst++ = (u8)((px >> 8) & 0xFF);  /* G */
+            *dst++ = (u8)((px >> 16) & 0xFF); /* B */
+            *dst++ = 0xFF;                    /* A -- the frame has no alpha */
+        }
+    }
+    sThumbValid[slot] = 1;
+    sThumbGeneration[slot]++;
+}
+
+/* Thumbnails live in a sidecar rather than inside the state file so that
+ * adding them did not have to bump VERSION -- a bump rejects every existing
+ * save on disk, and losing someone's states to gain a preview is a bad
+ * trade. A state without a sidecar simply shows no picture. */
+static void ThumbFilename(int slot, char* out, size_t cap) {
+    char base[64];
+    SlotFilename(slot, base, sizeof(base));
+    const char* dot = strrchr(base, '.');
+    const int stem = dot ? (int)(dot - base) : (int)strlen(base);
+    snprintf(out, cap, "%.*s.thumb", stem, base);
+}
+
+static void WriteThumbToDisk(int slot) {
+    if (slot < 0 || slot >= NUM_SLOTS || !sThumbValid[slot])
+        return;
+    char path[80];
+    ThumbFilename(slot, path, sizeof(path));
+    FILE* f = fopen(path, "wb");
+    if (!f)
+        return; /* best-effort: a missing preview is not worth a failed save */
+    const u32 magic = THUMB_MAGIC;
+    const u16 w = THUMB_W, h = THUMB_H;
+    if (fwrite(&magic, sizeof(magic), 1, f) == 1 && fwrite(&w, sizeof(w), 1, f) == 1 &&
+        fwrite(&h, sizeof(h), 1, f) == 1) {
+        fwrite(sThumbs[slot], 1, THUMB_BYTES, f);
+    }
+    fclose(f);
+}
+
+static int ReadThumbFromDisk(int slot) {
+    if (slot < 0 || slot >= NUM_SLOTS)
+        return 0;
+    char path[80];
+    ThumbFilename(slot, path, sizeof(path));
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    u32 magic = 0;
+    u16 w = 0, h = 0;
+    int ok = fread(&magic, sizeof(magic), 1, f) == 1 && fread(&w, sizeof(w), 1, f) == 1 &&
+             fread(&h, sizeof(h), 1, f) == 1 && magic == THUMB_MAGIC && w == THUMB_W && h == THUMB_H &&
+             fread(sThumbs[slot], 1, THUMB_BYTES, f) == THUMB_BYTES;
+    fclose(f);
+    if (ok) {
+        sThumbValid[slot] = 1;
+        sThumbGeneration[slot]++;
+    }
+    return ok;
+}
+
 static int WriteSlotToDisk(int slot) {
     if (slot < 0 || slot >= NUM_SLOTS)
         return 0;
@@ -516,9 +620,11 @@ int Port_QuickSave_SaveSlot(int slot) {
         return 0;
     if (!Snapshot_Capture(&sSlots[slot]))
         return 0;
+    CaptureThumbnail(slot);
     /* Best-effort disk persistence — failure is non-fatal, the in-memory
      * snapshot still works for the session. */
     WriteSlotToDisk(slot);
+    WriteThumbToDisk(slot);
     fprintf(stderr, "[quicksave] slot %d saved (%zu bytes)\n", slot, sSlots[slot].bytes);
     return 1;
 }
@@ -736,7 +842,7 @@ int Port_QuickSave_SlotCount(void) {
  * those slots on its own schedule, so parking a hand-made state there
  * would silently lose it. They stay loadable from the Saves tab. */
 int Port_QuickSave_ManualSlotCount(void) {
-    return AUTO_SLOT_BASE;
+    return NUM_MANUAL_SLOTS;
 }
 
 int Port_QuickSave_SelectedSlot(void) {
@@ -766,6 +872,20 @@ int Port_QuickSave_SaveSelected(void) {
     return Port_QuickSave_SaveSlot(Port_QuickSave_SelectedSlot());
 }
 
+/* One-button "save to a new slot": advance the cursor first, then save, so
+ * repeated presses lay down a rolling history across the manual slots instead
+ * of clobbering one. The cursor lands on what was just written, which is also
+ * what a plain load-selected then restores -- press save twice and load, and
+ * you get the second save, not a surprise.
+ *
+ * It wraps, so the oldest manual slot is eventually overwritten. That is the
+ * point: it is a quick-save, and a state you want kept can be parked in a slot
+ * the cursor is not walking, or simply re-saved. */
+int Port_QuickSave_SaveToNewSlot(void) {
+    Port_QuickSave_CycleSelectedSlot(+1);
+    return Port_QuickSave_SaveSlot(Port_QuickSave_SelectedSlot());
+}
+
 int Port_QuickSave_LoadSelected(void) {
     return Port_QuickSave_LoadSlot(Port_QuickSave_SelectedSlot());
 }
@@ -774,4 +894,37 @@ int Port_QuickSave_AutoSlotBase(void) {
 }
 int Port_QuickSave_AutoSlotCount(void) {
     return NUM_AUTO_SLOTS;
+}
+
+
+/* ------------------------------------------------------------------ */
+/*  Slot thumbnails (menu-facing)                                     */
+/* ------------------------------------------------------------------ */
+
+void Port_QuickSave_ThumbnailSize(int* w, int* h) {
+    if (w)
+        *w = THUMB_W;
+    if (h)
+        *h = THUMB_H;
+}
+
+/* RGBA8, THUMB_W x THUMB_H, or NULL when the slot has no preview. Slots
+ * written by an older build (or restored from a backup without the sidecar)
+ * legitimately have none. Reads the sidecar on first ask so previews show up
+ * for states that exist on disk but have not been loaded this session. */
+const unsigned char* Port_QuickSave_SlotThumbnail(int slot) {
+    if (slot < 0 || slot >= NUM_SLOTS)
+        return NULL;
+    if (!sThumbValid[slot] && Port_QuickSave_HasSlot(slot)) {
+        ReadThumbFromDisk(slot);
+    }
+    return sThumbValid[slot] ? sThumbs[slot] : NULL;
+}
+
+/* Changes whenever the slot's pixels change. The menu caches one GPU texture
+ * per slot and re-uploads only when this moves. */
+unsigned int Port_QuickSave_SlotThumbnailGeneration(int slot) {
+    if (slot < 0 || slot >= NUM_SLOTS)
+        return 0;
+    return sThumbGeneration[slot];
 }

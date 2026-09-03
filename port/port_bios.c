@@ -32,6 +32,7 @@
 extern int Port_QuickSave_SelectedSlot(void);
 extern void Port_QuickSave_CycleSelectedSlot(int direction);
 extern int Port_QuickSave_SaveSelected(void);
+extern int Port_QuickSave_SaveToNewSlot(void);
 extern int Port_QuickSave_LoadSelected(void);
 
 static bool gQuitRequested = false;
@@ -255,6 +256,22 @@ static void Port_PumpEvents(void) {
             }
             continue;
         }
+        /* Fast-forward, held. Bindable like everything else now -- it used to
+         * be a hard-wired TAB case, which no handheld can reach. Not gated on
+         * the menu being closed: releasing the button must always stop the
+         * fast-forward, or opening the menu mid-hold would leave it stuck on.
+         * The press is gated, though, so a bound button being assigned in the
+         * Controls tab doesn't run the game at 4x while you look at it. */
+        if (Port_Config_EventIsInputUp(&e, PORT_INPUT_FAST_FORWARD)) {
+            sFastForward = false;
+            continue;
+        }
+        if (!Port_DebugMenu_IsOpen() && !Port_Config_IsCapturingBinding() && !Port_ImGui_WantsTextInput() &&
+            Port_Config_EventIsInputDown(&e, PORT_INPUT_FAST_FORWARD)) {
+            sFastForward = true;
+            continue;
+        }
+
         /* Rebindable save-state hotkeys. These live outside the KEY_DOWN
          * block below because they are the only hotkeys that must also work
          * from a gamepad button -- on a handheld there is no keyboard to
@@ -267,10 +284,11 @@ static void Port_PumpEvents(void) {
          * are excluded for the same reason as the F-keys below. */
         if (!Port_DebugMenu_IsOpen() && !Port_Config_IsCapturingBinding() && !Port_ImGui_WantsTextInput()) {
             const bool wantsSave = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_SAVE);
+            const bool wantsSaveNew = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_SAVE_NEW);
             const bool wantsLoad = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_LOAD);
             const bool wantsNext = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_NEXT);
             const bool wantsPrev = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_PREV);
-            if (wantsSave || wantsLoad || wantsNext || wantsPrev) {
+            if (wantsSave || wantsSaveNew || wantsLoad || wantsNext || wantsPrev) {
                 char msg[64];
                 /* Same rule as the F-key path: Console-Parity makes every
                  * save-state action inert, including the slot cursor, so a
@@ -282,6 +300,10 @@ static void Port_PumpEvents(void) {
                 if (wantsNext || wantsPrev) {
                     Port_QuickSave_CycleSelectedSlot(wantsNext ? +1 : -1);
                     snprintf(msg, sizeof(msg), "State slot %d", Port_QuickSave_SelectedSlot() + 1);
+                } else if (wantsSaveNew) {
+                    const int ok = Port_QuickSave_SaveToNewSlot();
+                    snprintf(msg, sizeof(msg), ok ? "Saved to slot %d" : "Slot %d save FAILED",
+                             Port_QuickSave_SelectedSlot() + 1);
                 } else if (wantsSave) {
                     const int slot = Port_QuickSave_SelectedSlot();
                     const int ok = Port_QuickSave_SaveSelected();
@@ -466,19 +488,12 @@ static void Port_PumpEvents(void) {
                     continue;
                 }
             }
-            if (e.key.key == SDLK_TAB) {
-                sFastForward = true;
-                continue;
-            }
         }
-        if (e.type == SDL_EVENT_KEY_UP && e.key.key == SDLK_TAB) {
-            sFastForward = false;
-            continue;
-        }
-        /* Fast-forward via keyboard TAB only. The previous RIGHT_TRIGGER
-         * gamepad shortcut conflicted with the default soft-slot R2 binding
-         * (port_softslots.c) — pulling the trigger would simultaneously
-         * fast-forward and fire a soft-slot item. */
+        /* Fast-forward is handled at the top of this loop as a binding. It
+         * used to be TAB-only: an earlier RIGHT_TRIGGER shortcut was removed
+         * because it collided with the default soft-slot R2 bind, firing an
+         * item on every fast-forward. A user-chosen binding has no such fixed
+         * collision, and the Controls tab shows what else holds a button. */
 
         /* Gamepad shortcut to open the F8 debug menu: Select + Start.
          * Neither button alone is overloaded (Select opens the map in

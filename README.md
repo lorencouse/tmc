@@ -151,13 +151,14 @@ single-target invocation, and other build options.
 
 | Action                         | Keyboard         | Gamepad        |
 |--------------------------------|------------------|----------------|
-| Fast-forward (hold)            | Tab              | Right trigger  |
+| Fast-forward (hold)            | Tab              | unbound        |
 | Toggle fullscreen              | F11 / Alt+Enter  | —              |
 | Cycle upscaler                 | F12              | —              |
 | Toggle text-to-speech          | F7               | —              |
 | Open debug menu                | F8               | —              |
 | Capture bug report             | F9               | —              |
 | Save state (selected slot)     | F5               | unbound        |
+| Save state to a **new** slot   | Home             | unbound        |
 | Load state (also stops speech) | F6               | unbound        |
 | State slot: next / previous    | PgDn / PgUp      | unbound        |
 | Load state slot 2-5 directly   | F1-F4 (Shift=save) | —            |
@@ -167,13 +168,22 @@ Hold a direction, then press the roll-attack bind for a start-of-roll sword
 attack (uses your best sword regardless of A/B equip). Toggle in **F8 →
 Controls**. Rebindable there.
 
-There are five manual state slots plus a three-deep auto-save ring. The four
-save-state actions above act on whichever manual slot is **selected**, so four
-bindings reach all five slots — pick the slot in **F8 → Saves**, or walk it
-with the next/previous binds. The selection persists in `config.json`
-(`savestate_slot`). All four are in the **F8 → Controls** binding table and
-default to no gamepad button: on a handheld every pad button is already
-gameplay, so the choice is yours rather than one being taken silently.
+There are **20** manual state slots plus a three-deep auto-save ring. The
+save-state actions act on whichever manual slot is **selected**, so a handful
+of bindings reach all twenty — pick the slot in **F8 → Saves**, or walk it
+with the next/previous binds. *Save to a new slot* counts up instead, wrapping
+back to the first once all twenty are filled, so repeated presses leave a
+rolling history rather than overwriting one state. The selection persists in
+`config.json` (`savestate_slot`).
+
+**F8 → Saves** is a picker, not just a list: every slot shows a preview
+thumbnail of the moment it was taken alongside its timestamp. Twenty identical
+dates say nothing about which state is the one you want.
+
+All of these — fast-forward included — are in the **F8 → Controls** binding
+table and default to no gamepad button: on a handheld every pad button is
+already gameplay, so the choice is yours rather than one being taken
+silently.
 
 The **F8** debug menu also covers warp, items, heal, internal render scale,
 the renderer/shader toggles (see *Renderer & shaders*) and an Accessibility tab

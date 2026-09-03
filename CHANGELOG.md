@@ -17,8 +17,27 @@
 - F5/F6 were previously hard-wired cases in the event loop, so rebinding them
   would have left a second handler behind. They are now just the default
   bindings of the new actions, and rebinding actually frees the key. The auto
-  ring (slots 6-8) stays load-only — it overwrites itself on a schedule, so a
-  hand-made state parked there would silently vanish.
+  ring stays load-only — it overwrites itself on a schedule, so a hand-made
+  state parked there would silently vanish.
+- **Save to a new slot** (`state_save_new_slot`, default Home). Counts up and
+  wraps, so repeated presses leave a rolling history rather than overwriting
+  one state — the emulator quick-save idiom.
+- **Manual slots raised from 5 to 20.** ~409 KB of state plus a 38 KB
+  thumbnail per slot, so a full set is ~9 MB; the value of a rolling
+  quick-save is how far back it lets you rewind. `NUM_MANUAL_SLOTS` in
+  `port_quicksave.c` resizes the ring.
+- **Preview thumbnails in F8 → Saves.** Each save captures the frame that was
+  on screen, at half resolution (120x80), and the slot list shows it beside
+  the timestamp — twenty identical dates tell you nothing about which state is
+  the one you want. Stored in a `state_N.thumb` sidecar rather than inside the
+  state file so that adding them did not have to bump the state version, which
+  would have rejected every save already on disk. States without a sidecar
+  simply show no picture. The menu hands the pixels to ImGui as `ImTextureData`
+  so one code path covers both the SDL_Renderer and SDL_GPU backends.
+- **Fast-forward is bindable** (`fast_forward`, default Tab). It was TAB-only,
+  which no handheld can reach. Being a held action it watches both edges; the
+  release is deliberately not gated on the menu being closed, so opening the
+  menu mid-hold cannot leave it stuck on.
 
 ## v0.8.3 (2026-07-19)
 

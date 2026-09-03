@@ -454,6 +454,10 @@ void Port_QuickSave_SetAutoEnabled(int enabled);
 unsigned int Port_QuickSave_AutoIntervalMs(void);
 void Port_QuickSave_SetAutoIntervalMs(unsigned int ms);
 int Port_QuickSave_ManualSlotCount(void);
+int Port_QuickSave_SaveToNewSlot(void);
+void Port_QuickSave_ThumbnailSize(int* w, int* h);
+const unsigned char* Port_QuickSave_SlotThumbnail(int slot);
+unsigned int Port_QuickSave_SlotThumbnailGeneration(int slot);
 int Port_QuickSave_SelectedSlot(void);
 void Port_QuickSave_SetSelectedSlot(int slot);
 bool Port_Config_AutosaveEnabled(void);
@@ -927,6 +931,60 @@ static bool DrawRegionLanguageControls(bool prelaunch) {
     return regionChanged;
 }
 
+/* Slot-preview textures.
+ *
+ * Handed to ImGui as ImTextureData rather than created against SDL directly:
+ * this TU drives two renderer backends (SDL_Renderer and SDL_GPU, chosen at
+ * runtime), and since 1.92 both honour texture create/update/destroy requests
+ * through the platform-IO texture list. So one code path covers both, and no
+ * SDL_Texture* leaks if the backend changes under us.
+ *
+ * One entry per slot, uploaded only when the slot's thumbnail generation
+ * moves -- otherwise a 38 KB re-upload every frame the tab is open. */
+struct SlotThumb {
+    ImTextureData tex;
+    unsigned int generation = 0; /* 0 = nothing uploaded yet */
+    bool registered = false;
+};
+/* Sized above any plausible slot count; SlotThumbnailRef() bounds-checks
+ * against the array rather than trusting Port_QuickSave_SlotCount(). */
+static SlotThumb sSlotThumbs[64];
+
+/* Returns a drawable reference, or nullptr when the slot has no preview. */
+static ImTextureRef* SlotThumbnailRef(int slot) {
+    if (slot < 0 || slot >= (int)(sizeof(sSlotThumbs) / sizeof(sSlotThumbs[0])))
+        return nullptr;
+    const unsigned char* pixels = Port_QuickSave_SlotThumbnail(slot);
+    if (!pixels)
+        return nullptr;
+
+    int w = 0, h = 0;
+    Port_QuickSave_ThumbnailSize(&w, &h);
+    if (w <= 0 || h <= 0)
+        return nullptr;
+
+    SlotThumb& st = sSlotThumbs[slot];
+    const unsigned int gen = Port_QuickSave_SlotThumbnailGeneration(slot);
+    if (!st.registered) {
+        st.tex.Create(ImTextureFormat_RGBA32, w, h);
+        ImGui::GetPlatformIO().Textures.push_back(&st.tex);
+        st.registered = true;
+        st.generation = 0;
+    }
+    if (st.generation != gen && st.tex.Pixels) {
+        std::memcpy(st.tex.Pixels, pixels, (size_t)w * (size_t)h * 4u);
+        /* WantCreate on a texture the backend already made is the documented
+         * way to force a full re-upload; the backend recreates and clears it
+         * back to OK. Cheaper to reason about than a partial UpdateRect for
+         * an image that always changes wholesale. */
+        st.tex.SetStatus(ImTextureStatus_WantCreate);
+        st.generation = gen;
+    }
+    static ImTextureRef ref;
+    ref = st.tex.GetTexRef();
+    return &ref;
+}
+
 /* "F5" / "Pad: A, F5" / "unbound" — a one-line summary of everything bound
  * to an action, for surfaces that want to show a hotkey without duplicating
  * the Controls tab's per-binding widgets. Uses the same accessors the
@@ -965,6 +1023,12 @@ static void DrawRibbonSavesTab(void) {
     if (ImGui::Button("Quit to Title (no save)"))
         DoQuitToTitle(false);
     ImGui::PopStyleColor(2);
+    ImGui::SameLine();
+    if (ImGui::Button("Save to a new slot"))
+        Port_DebugMenu_ToastFromExternal(Port_QuickSave_SaveToNewSlot() ? "Saved" : "Save FAILED");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Advances to the next slot and saves there, so repeated presses "
+                          "leave a rolling history instead of overwriting one state.");
     ImGui::Separator();
 
     /* Console-Parity — run-integrity master switch. Lives here because it
@@ -1035,21 +1099,35 @@ static void DrawRibbonSavesTab(void) {
     const int n = Port_QuickSave_SlotCount();
     const int autoBase = Port_QuickSave_AutoSlotBase();
     const int selected = Port_QuickSave_SelectedSlot();
+    static int sLastSelected = -1;
+    const bool sScrollToSelected = (sLastSelected != selected);
+    sLastSelected = selected;
 
     {
-        char save[96], load[96];
-        DescribeBindings(PORT_INPUT_STATE_SAVE, save, sizeof(save));
-        DescribeBindings(PORT_INPUT_STATE_LOAD, load, sizeof(load));
+        char buf[96];
         ImGui::Text("Selected slot: %d", selected + 1);
-        ImGui::TextDisabled("Save: %s     Load: %s", save, load);
-        ImGui::TextDisabled("Rebind these in the Controls tab; they always act on the slot above.");
+        DescribeBindings(PORT_INPUT_STATE_SAVE_NEW, buf, sizeof(buf));
+        ImGui::TextDisabled("Save to a new slot: %s", buf);
+        DescribeBindings(PORT_INPUT_STATE_LOAD, buf, sizeof(buf));
+        ImGui::TextDisabled("Load the selected slot: %s", buf);
+        ImGui::TextDisabled("Pick the slot below, or rebind any of this in the Controls tab.");
     }
 
-    if (ImGui::BeginTable("##quicksaves_table", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
+    /* Preview thumbnails are what make this a picker rather than a list of
+     * timestamps -- five identical dates say nothing about which one is the
+     * fight you wanted. */
+    /* 23 rows of 80px previews overflow any handheld panel, so the table
+     * scrolls inside a bounded region instead of running off the window. */
+    const float tableH = ImGui::GetTextLineHeightWithSpacing() * 14.0f;
+    if (ImGui::BeginTable("##quicksaves_table", 5,
+                          ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_BordersInnerH,
+                          ImVec2(0.0f, tableH))) {
         ImGui::TableSetupColumn("Use", ImGuiTableColumnFlags_WidthFixed, 40.0f);
         ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, 128.0f);
         ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("Timestamp", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Saved", ImGuiTableColumnFlags_WidthStretch);
 
         for (int s = 0; s < n; ++s) {
             ImGui::PushID(s);
@@ -1061,6 +1139,11 @@ static void DrawRibbonSavesTab(void) {
             if (s < autoBase) {
                 if (ImGui::RadioButton("##sel", selected == s))
                     Port_QuickSave_SetSelectedSlot(s);
+                /* With 20 slots the selection is usually off-screen after the
+                 * next/prev binds move it, so follow it. */
+                if (selected == s && sScrollToSelected) {
+                    ImGui::SetScrollHereY(0.5f);
+                }
             }
 
             // Column 1: Slot name
@@ -1072,8 +1155,27 @@ static void DrawRibbonSavesTab(void) {
                 std::snprintf(tagbuf, sizeof(tagbuf), "Auto %d", s - autoBase + 1);
             ImGui::Text("%s", tagbuf);
 
-            // Column 2: Actions
+            // Column 2: Preview. Drawn at 120x80 -- the capture size, so no
+            // filtering runs over pixel art.
             ImGui::TableSetColumnIndex(2);
+            {
+                int tw = 0, th = 0;
+                Port_QuickSave_ThumbnailSize(&tw, &th);
+                ImTextureRef* ref = SlotThumbnailRef(s);
+                if (ref) {
+                    ImGui::Image(*ref, ImVec2((float)tw, (float)th));
+                } else {
+                    /* Keep the row height stable whether or not a preview
+                     * exists, so the table doesn't jump as slots fill. */
+                    ImVec2 p0 = ImGui::GetCursorScreenPos();
+                    ImVec2 p1 = ImVec2(p0.x + (float)tw, p0.y + (float)th);
+                    ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(90, 90, 90, 255));
+                    ImGui::Dummy(ImVec2((float)tw, (float)th));
+                }
+            }
+
+            // Column 3: Actions
+            ImGui::TableSetColumnIndex(3);
             if (ImGui::Button("Save")) {
                 if (Port_QuickSave_SaveSlot(s))
                     Port_DebugMenu_ToastFromExternal("Saved");
@@ -1090,8 +1192,8 @@ static void DrawRibbonSavesTab(void) {
                 ImGui::EndDisabled();
             }
 
-            // Column 3: Timestamp
-            ImGui::TableSetColumnIndex(3);
+            // Column 4: Timestamp
+            ImGui::TableSetColumnIndex(4);
             unsigned long long ts = Port_QuickSave_SlotTimestamp(s);
             if (ts == 0) {
                 ImGui::TextDisabled("(empty)");
@@ -1280,6 +1382,10 @@ static const char* InputLabel(int input) {
             return "State slot: next";
         case PORT_INPUT_STATE_PREV:
             return "State slot: previous";
+        case PORT_INPUT_STATE_SAVE_NEW:
+            return "Save state to a new slot";
+        case PORT_INPUT_FAST_FORWARD:
+            return "Fast-forward (hold)";
         default:
             return Port_Config_InputName((PortInput)input);
     }
@@ -1294,6 +1400,7 @@ static void DrawRibbonControlsTab(void) {
         static const HotkeyRow kHotkeys[] = {
             { "F8", "Open / close this settings menu (gamepad: Select+Start)" },
             { "F5 / F6", "Save / load the selected state slot (rebindable below)" },
+            { "Home", "Save to a *new* slot, rolling through them (rebindable)" },
             { "PgDn / PgUp", "Next / previous state slot (rebindable below)" },
             { "F1-F4", "Load save-state slot 2-5 directly  (Shift+Fn = save)" },
             { "F7", "Toggle text-to-speech" },
@@ -1301,7 +1408,7 @@ static void DrawRibbonControlsTab(void) {
             { "F10", "Speak nearby points of interest  (Shift: next, Ctrl: orient)" },
             { "F11 / Alt+Enter", "Toggle fullscreen" },
             { "F12", "Cycle the display filter / smoothing" },
-            { "Tab (hold)", "Fast-forward" },
+            { "Tab (hold)", "Fast-forward (rebindable below)" },
             { "[  ]", "Practice: set / reload practice point" },
             { "P  .", "Practice: pause / frame-advance while paused" },
             { "'  ;", "Practice: reset timer / record split" },

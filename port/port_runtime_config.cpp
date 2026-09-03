@@ -62,6 +62,10 @@ const std::array<Def, PORT_INPUT_COUNT> kDefaults = { {
     { PORT_INPUT_STATE_LOAD, "state_load", { "SDLK:0x4000003f" } },
     { PORT_INPUT_STATE_NEXT, "state_next_slot", { "SDLK:0x4000004e" } },
     { PORT_INPUT_STATE_PREV, "state_prev_slot", { "SDLK:0x4000004b" } },
+    /* Home = save to a new slot; Tab keeps its historical fast-forward job,
+     * now as a binding rather than a hard-wired case in the event loop. */
+    { PORT_INPUT_STATE_SAVE_NEW, "state_save_new_slot", { "SDLK:0x4000004a" } },
+    { PORT_INPUT_FAST_FORWARD, "fast_forward", { "SDLK:0x00000009" } },
 } };
 
 u8 sScale = 3;
@@ -1417,6 +1421,35 @@ extern "C" bool Port_Config_EventIsInputDown(const SDL_Event* e, PortInput input
             }
         }
     } else if (e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION && e->gaxis.value > kAxisThreshold) {
+        for (const Bind& b : sBinds[input]) {
+            if (b.axis >= 0 && b.axis < SDL_GAMEPAD_AXIS_COUNT && b.axis == (SDL_GamepadAxis)e->gaxis.axis) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Release counterpart of Port_Config_EventIsInputDown. Held actions
+ * (fast-forward) need both edges; the trigger case releases on the axis
+ * falling back under the same threshold the press used. */
+extern "C" bool Port_Config_EventIsInputUp(const SDL_Event* e, PortInput input) {
+    if (input < 0 || input >= PORT_INPUT_COUNT) {
+        return false;
+    }
+    if (e->type == SDL_EVENT_KEY_UP) {
+        for (const Bind& b : sBinds[input]) {
+            if (b.key != SDLK_UNKNOWN && b.key == e->key.key) {
+                return true;
+            }
+        }
+    } else if (e->type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
+        for (const Bind& b : sBinds[input]) {
+            if (b.pad >= 0 && b.pad < SDL_GAMEPAD_BUTTON_COUNT && b.pad == (SDL_GamepadButton)e->gbutton.button) {
+                return true;
+            }
+        }
+    } else if (e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION && e->gaxis.value <= kAxisThreshold) {
         for (const Bind& b : sBinds[input]) {
             if (b.axis >= 0 && b.axis < SDL_GAMEPAD_AXIS_COUNT && b.axis == (SDL_GamepadAxis)e->gaxis.axis) {
                 return true;

@@ -40,6 +40,14 @@ typedef enum {
     PORT_INPUT_STATE_LOAD,
     PORT_INPUT_STATE_NEXT,
     PORT_INPUT_STATE_PREV,
+    /* Save to the *next* slot rather than the selected one -- the emulator
+     * "quick save" idiom, where repeated presses leave a rolling history
+     * instead of overwriting one state. */
+    PORT_INPUT_STATE_SAVE_NEW,
+    /* Fast-forward. Unlike every other entry here this is a *held* action,
+     * so port_bios.c watches both the down and the up edge. Was hard-wired
+     * to TAB; TAB stays its keyboard default. */
+    PORT_INPUT_FAST_FORWARD,
     PORT_INPUT_COUNT,
 } PortInput;
 
@@ -300,6 +308,9 @@ void Port_Config_OpenGamepads(void);
 void Port_Config_HandleEvent(const SDL_Event* e);
 /* True when an SDL event is a fresh press bound to `input` (see .cpp). */
 bool Port_Config_EventIsInputDown(const SDL_Event* e, PortInput input);
+/* Release counterpart of the above, for held actions (fast-forward). Key
+ * repeats never produce an up event, so there is no repeat filter here. */
+bool Port_Config_EventIsInputUp(const SDL_Event* e, PortInput input);
 #endif
 bool Port_Config_InputPressed(PortInput input);
 void Port_Config_CloseGamepads(void);
