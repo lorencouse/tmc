@@ -950,18 +950,24 @@ struct SlotThumb {
  * against the array rather than trusting Port_QuickSave_SlotCount(). */
 static SlotThumb sSlotThumbs[64];
 
-/* Returns a drawable reference, or nullptr when the slot has no preview. */
-static ImTextureRef* SlotThumbnailRef(int slot) {
+/* Fills `out` with a drawable reference and returns true, or returns false
+ * when the slot has no preview. An out-param rather than a returned pointer:
+ * the obvious implementation hands back the address of a function-local
+ * static, which quietly breaks the first time a caller uses two slots'
+ * references in one expression. */
+static bool SlotThumbnailRef(int slot, ImTextureRef* out) {
+    if (!out)
+        return false;
     if (slot < 0 || slot >= (int)(sizeof(sSlotThumbs) / sizeof(sSlotThumbs[0])))
-        return nullptr;
+        return false;
     const unsigned char* pixels = Port_QuickSave_SlotThumbnail(slot);
     if (!pixels)
-        return nullptr;
+        return false;
 
     int w = 0, h = 0;
     Port_QuickSave_ThumbnailSize(&w, &h);
     if (w <= 0 || h <= 0)
-        return nullptr;
+        return false;
 
     SlotThumb& st = sSlotThumbs[slot];
     const unsigned int gen = Port_QuickSave_SlotThumbnailGeneration(slot);
@@ -980,9 +986,8 @@ static ImTextureRef* SlotThumbnailRef(int slot) {
         st.tex.SetStatus(ImTextureStatus_WantCreate);
         st.generation = gen;
     }
-    static ImTextureRef ref;
-    ref = st.tex.GetTexRef();
-    return &ref;
+    *out = st.tex.GetTexRef();
+    return true;
 }
 
 /* "F5" / "Pad: A, F5" / "unbound" — a one-line summary of everything bound
@@ -1161,9 +1166,9 @@ static void DrawRibbonSavesTab(void) {
             {
                 int tw = 0, th = 0;
                 Port_QuickSave_ThumbnailSize(&tw, &th);
-                ImTextureRef* ref = SlotThumbnailRef(s);
-                if (ref) {
-                    ImGui::Image(*ref, ImVec2((float)tw, (float)th));
+                ImTextureRef ref;
+                if (SlotThumbnailRef(s, &ref)) {
+                    ImGui::Image(ref, ImVec2((float)tw, (float)th));
                 } else {
                     /* Keep the row height stable whether or not a preview
                      * exists, so the table doesn't jump as slots fill. */
