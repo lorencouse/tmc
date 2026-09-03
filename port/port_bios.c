@@ -964,16 +964,16 @@ void VBlankIntrWait(void) {
          * cannot drift into the bad half. A cycle that misses a refresh is paid
          * back with one un-presented catch-up tick, keeping game speed at the
          * tick rate under mild overload instead of halving it. */
-        bool vsyncLocked = false;
-        if (!uncappedTicks && Port_Config_GetVsyncLockTicks() && Port_PPU_VSyncEnabled() &&
-            renderPeriodNs == tickPeriodNs) {
-            unsigned refresh = Port_PPU_DisplayRefreshRate();
-            /* Unknown refresh (headless/dummy) keeps the 60 Hz assumption used
-             * for the VSync ceiling above. */
-            u64 refreshNs = refresh ? 1000000000ULL / refresh : tickPeriodNs;
-            u64 diff = refreshNs > tickPeriodNs ? refreshNs - tickPeriodNs : tickPeriodNs - refreshNs;
-            vsyncLocked = diff * 100 <= tickPeriodNs; /* within 1% */
-        }
+        /* Render and tick periods "match" within 1%: frame_time_ns is often
+         * written as 16666667 while the tick period computes to 16666666. The
+         * display refresh is deliberately NOT a condition: the minimum-cycle
+         * guard below caps game speed at the tick rate however early a present
+         * returns, and catch-up ticks hold it there when a present runs long
+         * (a 50 Hz panel, or a software renderer whose "vsync" is a timer at
+         * an off-nominal rate such as the RG35XX SP's 66.8 Hz). */
+        u64 periodDiff = renderPeriodNs > tickPeriodNs ? renderPeriodNs - tickPeriodNs : tickPeriodNs - renderPeriodNs;
+        bool vsyncLocked = !uncappedTicks && Port_Config_GetVsyncLockTicks() && Port_PPU_VSyncEnabled() &&
+                           periodDiff * 100 <= tickPeriodNs;
         sVsyncLockedNow = vsyncLocked ? 1 : 0;
         if (vsyncLocked) {
             u64 cycleStart = lastFrameNs;
