@@ -7,6 +7,7 @@
 #include "screen.h"
 #include "script.h"
 #include "structures.h"
+#include "region.h"
 
 /** File signature */
 #define SIGNATURE 'MCZ3'
@@ -28,6 +29,15 @@ typedef enum {
     NUM_LANGUAGES,
 } Language;
 
+/*
+ * EU stores its language-gated save-header resources in slots 2..6. Slot 2 is
+ * English, then FR/DE/ES/IT follow. USA and JP use the public Language enum
+ * directly.
+ */
+#define EU_LANGUAGE_EN_SLOT LANGUAGE_FR
+#define EU_LANGUAGE_LAST_SLOT NUM_LANGUAGES
+#define LANGUAGE_SLOT_COUNT (NUM_LANGUAGES + 1)
+
 #ifdef MULTI_REGION
 /* Fat binary is compiled USA/EU-baseline; GAME_LANGUAGE is the compile-time
  * default (English) used in the static sDefaultSettings initializer and as a
@@ -41,6 +51,67 @@ typedef enum {
 #define GAME_LANGUAGE LANGUAGE_JP
 #endif
 #endif
+
+static inline u32 RegionLanguageSlotCount(void) {
+    return REGION_IS_EU ? LANGUAGE_SLOT_COUNT : NUM_LANGUAGES;
+}
+
+static inline u8 RegionDefaultLanguage(void) {
+    if (REGION_IS_JP) {
+        return LANGUAGE_JP;
+    }
+    if (REGION_IS_EU) {
+        return EU_LANGUAGE_EN_SLOT;
+    }
+    return GAME_LANGUAGE;
+}
+
+static inline s32 RegionPreferredLanguageToSaveSlot(s32 language) {
+    if (language < 0) {
+        return -1;
+    }
+    if (REGION_IS_JP) {
+        return LANGUAGE_JP;
+    }
+    if (REGION_IS_EU) {
+        if (language <= LANGUAGE_EN) {
+            return EU_LANGUAGE_EN_SLOT;
+        }
+        if (language < NUM_LANGUAGES) {
+            return language + 1;
+        }
+        return -1;
+    }
+    return language < NUM_LANGUAGES ? language : -1;
+}
+
+/*
+ * The half-open range of gTranslations slots port_rom.c must populate for the
+ * active region. This is the ONE definition: the loader fills it and
+ * RegionSaveLanguageValid accepts exactly it, so the two cannot drift. They did
+ * drift once -- the loader stopped at slot 5 while the header accepted 6, which
+ * left EU Italian resolving to a NULL translation on every boot.
+ */
+static inline void RegionTranslationSlotRange(u32* firstOut, u32* lastOut) {
+    if (REGION_IS_JP) {
+        *firstOut = LANGUAGE_JP;
+        *lastOut = LANGUAGE_JP;
+    } else if (REGION_IS_EU) {
+        *firstOut = EU_LANGUAGE_EN_SLOT;
+        *lastOut = EU_LANGUAGE_LAST_SLOT;
+    } else {
+        *firstOut = GAME_LANGUAGE;
+        *lastOut = GAME_LANGUAGE;
+    }
+}
+
+static inline bool32 RegionSaveLanguageValid(u32 language) {
+    u32 first, last;
+
+    RegionTranslationSlotRange(&first, &last);
+    return language >= first && language <= last;
+}
+
 
 /** Program tasks. */
 typedef enum {

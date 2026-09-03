@@ -1075,6 +1075,22 @@ target_end()
 
 
 -- ====================
+-- Region language-slot mapping test (guards the save-header language index
+-- against the shared 7-entry ROM translation table; see
+-- port_region_language_test.c)
+-- ====================
+target("region_language_test")
+    set_kind("binary")
+    set_languages("c11")
+    set_targetdir("build/pc")
+    add_includedirs(".", "port", "include")
+    add_defines("PC_PORT", "NON_MATCHING", "MULTI_REGION", "USA", "ENGLISH", "REVISION=0")
+    add_forceincludes("region.h")
+    add_files("port/port_region_language_test.c")
+target_end()
+
+
+-- ====================
 -- Debug-menu action-layer regression test (guards per-item toggle exclusivity
 -- + flag/dungeon/stat/bottle helpers; see port_debug_actions_test.c)
 -- ====================

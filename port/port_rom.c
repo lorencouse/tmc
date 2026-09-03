@@ -9,6 +9,7 @@
 
 #include "port_rom.h"
 #include "area.h"
+#include "main.h"
 #include "map.h"
 #include "port_asset_loader.h"
 #include "port_config.h"
@@ -1561,13 +1562,17 @@ void Port_LoadRom(const char* path) {
     }
 
     /* gTranslations — resolved from active ROM */
-    memset(gTranslations, 0, sizeof(void*) * 7);
-    if (REGION_IS_JP) {
-        gTranslations[0] = Port_UnpackRomDataPtr(&gRomData[R->translations], 0);
-    } else if (REGION_IS_USA) {
-        gTranslations[1] = Port_UnpackRomDataPtr(&gRomData[R->translations], 1);
-    } else if (REGION_IS_EU) {
-        for (int i = 1; i <= 5; i++) {
+    /* The 7-entry ROM table is shared across regions: 0 = JP, 1 = USA English,
+     * 2..6 = the EU ROM's English/FR/DE/ES/IT. The save header stores that same
+     * index, which is why the decomp treats `language >= 2` as "European"
+     * (fileselect.c's extra row, staffroll.c, objectA2.c). Loading only 1..5
+     * left slot 6 -- EU Italian -- permanently NULL. */
+    {
+        u32 first, last, i;
+
+        RegionTranslationSlotRange(&first, &last);
+        memset(gTranslations, 0, sizeof(void*) * LANGUAGE_SLOT_COUNT);
+        for (i = first; i <= last; i++) {
             gTranslations[i] = Port_UnpackRomDataPtr(&gRomData[R->translations], i);
         }
     }
@@ -1829,15 +1834,17 @@ void Port_ApplyLanguage(void) {
     if (lang < 0) {
         sLastAppliedPref = lang;
         const int current = gSaveHeader->language;
-        if (current >= 0 && current < 6 /* NUM_LANGUAGES */ && gTranslations[current] != NULL) {
+        if (current >= 0 && current < (int)RegionLanguageSlotCount() && gTranslations[current] != NULL &&
+            RegionSaveLanguageValid((u32)current)) {
             return;
         }
-        lang = REGION_IS_JP ? 0 /* LANGUAGE_JP */ : 1 /* LANGUAGE_EN */;
+        lang = RegionDefaultLanguage();
     } else {
         sLastAppliedPref = lang;
+        lang = RegionPreferredLanguageToSaveSlot(lang);
     }
 
-    if (lang >= 0 && lang < 6 /* NUM_LANGUAGES */ && gTranslations[lang] != NULL) {
+    if (lang >= 0 && lang < (int)RegionLanguageSlotCount() && gTranslations[lang] != NULL) {
         gSaveHeader->language = (u8)lang;
     }
 }
