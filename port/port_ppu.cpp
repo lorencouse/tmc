@@ -48,6 +48,12 @@ extern "C" uint64_t gPortProfileRenderNs;
  * upload + renderer draw, [2] SDL_RenderPresent (the X copy / vsync sleep). */
 extern "C" uint64_t gPortProfPresentPhaseNs[3];
 uint64_t gPortProfPresentPhaseNs[3] = { 0, 0, 0 };
+/* Present-path census for TMC_PACE_LOG:
+ * [0] threaded, [1] sync: ImGui had draw data, [2] sync: soft-slot overlay,
+ * [3] sync: touch controls, [4] sync: worker not running, [5] sync: submit
+ * refused. Reset each time the pace line is printed. */
+extern "C" uint64_t gPortPresentPathCounts[6];
+uint64_t gPortPresentPathCounts[6] = { 0, 0, 0, 0, 0, 0 };
 /* Port_Widescreen_* lives in port_linked_stubs.c; include
  * port_widescreen.h for the runtime WIP toggle gate. */
 
@@ -1697,8 +1703,21 @@ extern "C" void Port_PPU_PresentFrame(void) {
          * produced decide: an empty frame — the normal case during gameplay
          * — clears the way for a threaded present. */
         const bool imguiLive = Port_ImGui_BuildFrame();
-        const bool overlayWanted = (imguiLive && Port_ImGui_HasDrawData()) || Port_SoftSlots_OverlayVisible() ||
-                                   Port_TouchControls_IsVisible();
+        const bool imguiDraws = imguiLive && Port_ImGui_HasDrawData();
+        const bool softSlots = Port_SoftSlots_OverlayVisible();
+        const bool touchVisible = Port_TouchControls_IsVisible();
+        const bool overlayWanted = imguiDraws || softSlots || touchVisible;
+        /* Why a frame went synchronous. Guessing at this from fps alone is how
+         * you end up optimising the wrong thing: an overlay that draws every
+         * frame silently disables the whole threaded path. */
+        if (imguiDraws)
+            ++gPortPresentPathCounts[1];
+        if (softSlots)
+            ++gPortPresentPathCounts[2];
+        if (touchVisible)
+            ++gPortPresentPathCounts[3];
+        if (!Port_PresentThread_Active())
+            ++gPortPresentPathCounts[4];
 
         if (!overlayWanted && Port_PresentThread_Active()) {
             PortPresentJob job;
@@ -1714,7 +1733,11 @@ extern "C" void Port_PPU_PresentFrame(void) {
             job.bgR = bgR;
             job.bgG = bgG;
             job.bgB = bgB;
-            if (Port_PresentThread_Submit(&job)) {
+            const bool submitted = Port_PresentThread_Submit(&job);
+            if (!submitted)
+                ++gPortPresentPathCounts[5];
+            if (submitted) {
+                ++gPortPresentPathCounts[0];
                 /* The touch layer's per-frame held-state update is input
                  * bookkeeping, not drawing; a null renderer makes it skip the
                  * draw and do the rest. Skipping it entirely would freeze

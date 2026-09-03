@@ -623,6 +623,7 @@ static u32 sVsyncLockCatchUp = 0;
 static int sVsyncLockedNow = 0;    /* for the TMC_PACE_LOG line */
 static u64 sPacePresentNsThisSec = 0;
 extern u64 gPortProfPresentPhaseNs[3]; /* port_ppu.cpp: raster+prescale / upload+draw / RenderPresent */ /* summed present durations, for the TMC_PACE_LOG line */
+extern u64 gPortPresentPathCounts[6]; /* port_ppu.cpp: threaded / sync-by-reason present census */
 static u32 sPresentsThisSec = 0;        /* presents in the 1 s FPS-title window */
 
 /* Live rates for the on-screen FPS counter (port_imgui_menu.cpp externs
@@ -1185,6 +1186,14 @@ void VBlankIntrWait(void) {
                         gPortProfPresentPhaseNs[0] / 1e6 / np, gPortProfPresentPhaseNs[1] / 1e6 / np,
                         gPortProfPresentPhaseNs[2] / 1e6 / np);
                 gPortProfPresentPhaseNs[0] = gPortProfPresentPhaseNs[1] = gPortProfPresentPhaseNs[2] = 0;
+                fprintf(stderr,
+                        "[pace] present path: threaded=%llu sync(imgui=%llu softslots=%llu touch=%llu "
+                        "noworker=%llu refused=%llu)\n",
+                        (unsigned long long)gPortPresentPathCounts[0], (unsigned long long)gPortPresentPathCounts[1],
+                        (unsigned long long)gPortPresentPathCounts[2], (unsigned long long)gPortPresentPathCounts[3],
+                        (unsigned long long)gPortPresentPathCounts[4], (unsigned long long)gPortPresentPathCounts[5]);
+                for (int i = 0; i < 6; ++i)
+                    gPortPresentPathCounts[i] = 0;
             }
         }
 
