@@ -689,9 +689,16 @@ jobs:
           # version (2.35 in bullseye, 2.38 on ubuntu-22.04).
           # With TMC_SDL3_SHARED the backends live in libSDL3.so.0, not in
           # tmc_pc, so scan whichever object actually carries SDL.
+          # ldd cannot resolve it (xmake's package dir is not on the loader
+          # path), so look the file up in the package tree instead.
           SCAN="$BIN"
-          sdl_lib="$(ldd "$BIN" 2>/dev/null | awk '/libSDL3\.so/ {print $3}')"
-          if [ -n "$sdl_lib" ] && [ -f "$sdl_lib" ]; then
+          if objdump -p "$BIN" | grep -q 'NEEDED.*libSDL3\.so\.0'; then
+            sdl_lib="$(find "${HOME}/.xmake/packages" /github/home/.xmake/packages /root/.xmake/packages \
+                         -name 'libSDL3.so.0*' -type f 2>/dev/null | head -1)"
+            if [ -z "$sdl_lib" ]; then
+              echo "::error::tmc_pc needs libSDL3.so.0 but no built libSDL3 was found in the xmake package tree"
+              exit 1
+            fi
             echo "SDL3 is shared: scanning $sdl_lib"
             SCAN="$sdl_lib"
           fi
@@ -946,12 +953,12 @@ jobs:
           # Shared-SDL3 legs ship the library the binary was linked against
           # beside it, resolved through the same rpath/LD_LIBRARY_PATH the
           # loader will use. Static legs have no libSDL3 in ldd and skip this.
-          if command -v ldd >/dev/null 2>&1; then
-            sdl_lib="$(ldd "$BIN_PATH" 2>/dev/null | awk '/libSDL3\.so/ {print $3}')"
-            if [ -n "$sdl_lib" ] && [ -f "$sdl_lib" ]; then
-              cp -L "$sdl_lib" "$OUTDIR/libSDL3.so.0"
-              echo "bundled $(basename "$sdl_lib") as libSDL3.so.0"
-            fi
+          if command -v objdump >/dev/null 2>&1 && objdump -p "$BIN_PATH" | grep -q 'NEEDED.*libSDL3\.so\.0'; then
+            sdl_lib="$(find "${HOME}/.xmake/packages" /github/home/.xmake/packages /root/.xmake/packages \
+                         -name 'libSDL3.so.0*' -type f 2>/dev/null | head -1)"
+            test -n "$sdl_lib"
+            cp -L "$sdl_lib" "$OUTDIR/libSDL3.so.0"
+            echo "bundled $(basename "$sdl_lib") as libSDL3.so.0"
           fi
 
       - name: Create archive
