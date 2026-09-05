@@ -172,6 +172,18 @@ bool Port_PresentThread_Start(SDL_Renderer* renderer) {
         return false;
     }
 
+    /* Only the software renderer can be driven from a second thread. A GL /
+     * GLES renderer's context is current on the thread that created it (the
+     * main thread), so every present issued from the worker would silently
+     * draw nothing -- seen on muOS through the SDL3-on-SDL2 shim as the
+     * LOADING splash staying up while the game ran underneath. */
+    const char* rname = SDL_GetRendererName(renderer);
+    if (rname == nullptr || std::strcmp(rname, "software") != 0) {
+        std::fprintf(stderr, "[present] renderer '%s' is GPU-backed; keeping the window blit on the game thread\n",
+                     rname ? rname : "?");
+        return false;
+    }
+
     sRenderer = renderer;
     sMutex = SDL_CreateMutex();
     sWake = SDL_CreateCondition();

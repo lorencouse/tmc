@@ -281,7 +281,13 @@ template <typename Body> void PaintFrame(SDL_Window* window, SDL_Color bgColor, 
 
     int width = 0;
     int height = 0;
-    SDL_GetWindowSize(window, &width, &height);
+    /* Lay out against the renderer's real output, not the window's nominal
+     * size: fullscreen on a handheld the two differ until the resize event
+     * lands (the window still reports the 240x160 it asked for), and a
+     * splash sized for that lands in the top-left corner of the panel. */
+    if (!SDL_GetCurrentRenderOutputSize(renderer, &width, &height) || width <= 0 || height <= 0) {
+        SDL_GetWindowSize(window, &width, &height);
+    }
     const float fw = static_cast<float>(width);
     const float fh = static_cast<float>(height);
     const float scale = std::max(2.0f, std::round(fw / 240.0f));
