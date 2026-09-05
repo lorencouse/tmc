@@ -139,16 +139,18 @@ jobs:
         shell: bash
         run: |
           set -eux
-          # bullseye left LTS in August 2026 and deb.debian.org is now
-          # serving 404s for bullseye-security pool files mid-install
-          # (three runs on 2026-09-05), so go straight to the archive,
-          # which carries bullseye and bullseye-security in full.
-          printf '%s\n' \
-            'deb http://archive.debian.org/debian bullseye main' \
-            'deb http://archive.debian.org/debian-security bullseye-security main' \
-            > /etc/apt/sources.list
+          # bullseye left LTS in August 2026. deb.debian.org still serves
+          # bullseye main but 404s on bullseye-security pool files during
+          # install, and archive.debian.org has no bullseye-security yet
+          # (four failed runs on 2026-09-05). A build container needs no
+          # security updates, so use main only, archive as the fallback.
           echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until
-          apt-get update
+          echo 'deb http://deb.debian.org/debian bullseye main' > /etc/apt/sources.list
+          if ! apt-get update; then
+            echo "::warning::deb.debian.org failed for bullseye — falling back to archive.debian.org"
+            echo 'deb http://archive.debian.org/debian bullseye main' > /etc/apt/sources.list
+            apt-get update
+          fi
           apt-get install -y --no-install-recommends \
             git ca-certificates curl wget sudo xz-utils unzip zip \
             python3 python3-pip build-essential pkg-config
