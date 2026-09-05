@@ -691,10 +691,15 @@ jobs:
           # tmc_pc, so scan whichever object actually carries SDL.
           # ldd cannot resolve it (xmake's package dir is not on the loader
           # path), so look the file up in the package tree instead.
+          # Written pipefail-safe: `objdump | grep -q` and `find | head -1`
+          # both SIGPIPE their producer, and find exits 1 on a missing
+          # search root, and this step runs under -e -o pipefail.
           SCAN="$BIN"
-          if objdump -p "$BIN" | grep -q 'NEEDED.*libSDL3\.so\.0'; then
-            sdl_lib="$(find "${HOME}/.xmake/packages" /github/home/.xmake/packages /root/.xmake/packages \
-                         -name 'libSDL3.so.0*' -type f 2>/dev/null | head -1)"
+          dynp="$(mktemp)"
+          objdump -p "$BIN" > "$dynp"
+          if grep -q 'NEEDED.*libSDL3\.so\.0' "$dynp"; then
+            sdl_lib="$( { find "${HOME}/.xmake/packages" /github/home/.xmake/packages /root/.xmake/packages \
+                          -name 'libSDL3.so.0*' -type f 2>/dev/null || true; } | head -1)"
             if [ -z "$sdl_lib" ]; then
               echo "::error::tmc_pc needs libSDL3.so.0 but no built libSDL3 was found in the xmake package tree"
               exit 1
@@ -953,9 +958,14 @@ jobs:
           # Shared-SDL3 legs ship the library the binary was linked against
           # beside it, resolved through the same rpath/LD_LIBRARY_PATH the
           # loader will use. Static legs have no libSDL3 in ldd and skip this.
-          if command -v objdump >/dev/null 2>&1 && objdump -p "$BIN_PATH" | grep -q 'NEEDED.*libSDL3\.so\.0'; then
-            sdl_lib="$(find "${HOME}/.xmake/packages" /github/home/.xmake/packages /root/.xmake/packages \
-                         -name 'libSDL3.so.0*' -type f 2>/dev/null | head -1)"
+          needs_sdl3=0
+          if command -v objdump >/dev/null 2>&1; then
+            objdump -p "$BIN_PATH" > "$OUTDIR/.dyn" && grep -q 'NEEDED.*libSDL3\.so\.0' "$OUTDIR/.dyn" && needs_sdl3=1
+            rm -f "$OUTDIR/.dyn"
+          fi
+          if [ "$needs_sdl3" = 1 ]; then
+            sdl_lib="$( { find "${HOME}/.xmake/packages" /github/home/.xmake/packages /root/.xmake/packages \
+                          -name 'libSDL3.so.0*' -type f 2>/dev/null || true; } | head -1)"
             test -n "$sdl_lib"
             cp -L "$sdl_lib" "$OUTDIR/libSDL3.so.0"
             echo "bundled $(basename "$sdl_lib") as libSDL3.so.0"
