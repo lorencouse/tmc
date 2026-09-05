@@ -88,4 +88,6 @@ jobs:
             uploads/*.tar.gz
             uploads/*.apk
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          # A filtered dispatch (e.g. linux-arm only) produces no .apk;
+          # the Flatten step above already fails if nothing was built.
+          fail_on_unmatched_files: false
