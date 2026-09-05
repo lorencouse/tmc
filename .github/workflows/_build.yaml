@@ -862,9 +862,20 @@ jobs:
           BIN="$PWD/build/pc/${{ matrix.exe_name }}"
           test -f "$BIN"
           SMOKE_DIR=$(mktemp -d)
+          # Shared-SDL3 legs: the library lives in xmake's package tree,
+          # which the loader does not search, so stage it as libSDL3.so.0
+          # next to the smoke run (pipefail-safe, see the audio gate).
+          SMOKE_LIBS="$SMOKE_DIR/libs"; mkdir -p "$SMOKE_LIBS"
+          dynp="$(mktemp)"; objdump -p "$BIN" > "$dynp"
+          if grep -q 'NEEDED.*libSDL3\.so\.0' "$dynp"; then
+            sdl_lib="$( { find "${HOME}/.xmake/packages" /github/home/.xmake/packages /root/.xmake/packages \
+                          -name 'libSDL3.so.0*' -type f 2>/dev/null || true; } | head -1)"
+            test -n "$sdl_lib"
+            cp -L "$sdl_lib" "$SMOKE_LIBS/libSDL3.so.0"
+          fi
           cd "$SMOKE_DIR"
           code=0
-          timeout 20 env TMC_AUTOPLAY=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$BIN" --no-audio > smoke.log 2>&1 || code=$?
+          timeout 20 env LD_LIBRARY_PATH="$SMOKE_LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" TMC_AUTOPLAY=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$BIN" --no-audio > smoke.log 2>&1 || code=$?
           cat smoke.log
           test "$code" = 124
           grep -q "Prelaunch: no ROM yet" smoke.log
