@@ -194,7 +194,12 @@ else
     -- JNI signatures (3.4.12 added a scancode arg to onNativePadDown; the
     -- 3.4.4-era glue shipped in v0.8.1 crashed every Android launch with
     -- NoSuchMethodError at registration). Bump BOTH together.
-    add_requires("libsdl3 3.4.12", {configs = {shared = false}})
+    -- TMC_SDL3_SHARED=1 links SDL3 as a shared library on Linux. The
+    -- PortMaster package needs that: it runs the binary against the
+    -- SDL3-on-SDL2 shim (bmdhacks/SDL, branch sdl2-backend) instead of a
+    -- real SDL3, which only works when libSDL3.so.0 is resolved at load.
+    local sdl3_shared = is_plat("linux") and os.getenv("TMC_SDL3_SHARED") == "1"
+    add_requires("libsdl3 3.4.12", {configs = {shared = sdl3_shared}})
 end
 add_requires("guilite")
 
@@ -981,6 +986,10 @@ target("tmc_pc")
     -- libgomp is still dynamic; see the OpenMP notes below.
     if is_plat("linux") then
         add_ldflags("-static-libstdc++", "-static-libgcc", {force = true})
+        -- Look next to the binary first, so a libSDL3.so.0 shipped beside
+        -- tmc_pc (or LD_LIBRARY_PATH) wins over the system copy. Inert for
+        -- the static-SDL3 build.
+        add_ldflags("-Wl,-rpath,$ORIGIN", {force = true})
     end
     
     -- Math library

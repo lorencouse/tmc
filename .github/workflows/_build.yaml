@@ -64,7 +64,7 @@ jobs:
           # concepts, ranges, format or coroutines, so no LLVM backport
           # is needed. The runner stays the native arm64 one — this is a
           # container, not a cross-compile.
-          linux_arm='{"runner":"ubuntu-22.04-arm","os_name":"linux","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"debian:bullseye","glibc_max":"2.31","cache_tag":"bullseye"}'
+          linux_arm='{"runner":"ubuntu-22.04-arm","os_name":"linux","arch":"arm64","region":"multi","flag":"--usa","exe_name":"tmc_pc","extractor_name":"asset_extractor","container":"debian:bullseye","glibc_max":"2.31","cache_tag":"bullseye","sdl3_shared":"1"}'
           # Pin to windows-2022: GitHub rolled `windows-latest` to Server
           # 2025 with a different VS/MinGW tooling layout, which broke
           # xmake-repo's libpng install step (exit 127 at the post-compile
@@ -604,6 +604,9 @@ jobs:
           # Windows-ARM64 job must pass --arch=arm64. Native Linux/macOS arm64
           # runners build for the host arch, so they leave this empty.
           TMC_XMAKE_ARCH: ${{ (matrix.os_name == 'windows' && matrix.arch == 'arm64') && 'arm64' || '' }}
+          # linux-arm64 links SDL3 shared: the PortMaster package swaps in
+          # the SDL3-on-SDL2 shim at load time, which a static SDL3 defeats.
+          TMC_SDL3_SHARED: ${{ matrix.sdl3_shared || '' }}
         run: |
           # build.py covers configure (xmake f) + build tmc_pc +
           # build asset_extractor. --slim skips xmake's
@@ -684,10 +687,18 @@ jobs:
           # -a is deliberate too: without it `strings` scans only loaded
           # data sections, and which ones that covers varies by binutils
           # version (2.35 in bullseye, 2.38 on ubuntu-22.04).
+          # With TMC_SDL3_SHARED the backends live in libSDL3.so.0, not in
+          # tmc_pc, so scan whichever object actually carries SDL.
+          SCAN="$BIN"
+          sdl_lib="$(ldd "$BIN" 2>/dev/null | awk '/libSDL3\.so/ {print $3}')"
+          if [ -n "$sdl_lib" ] && [ -f "$sdl_lib" ]; then
+            echo "SDL3 is shared: scanning $sdl_lib"
+            SCAN="$sdl_lib"
+          fi
           syms="$(mktemp)"
-          strings -a "$BIN" > "$syms"
+          strings -a "$SCAN" > "$syms"
           nstr="$(wc -l < "$syms")"
-          echo "strings -a: $nstr strings in $BIN"
+          echo "strings -a: $nstr strings in $SCAN"
 
           # An empty scan means the tool failed; any verdict from it would
           # be meaningless, so say that rather than blaming the backends.
@@ -932,6 +943,17 @@ jobs:
           mkdir -p "$OUTDIR"
           cp "$BIN_PATH" "$OUTDIR/${{ matrix.exe_name }}"
 
+          # Shared-SDL3 legs ship the library the binary was linked against
+          # beside it, resolved through the same rpath/LD_LIBRARY_PATH the
+          # loader will use. Static legs have no libSDL3 in ldd and skip this.
+          if command -v ldd >/dev/null 2>&1; then
+            sdl_lib="$(ldd "$BIN_PATH" 2>/dev/null | awk '/libSDL3\.so/ {print $3}')"
+            if [ -n "$sdl_lib" ] && [ -f "$sdl_lib" ]; then
+              cp -L "$sdl_lib" "$OUTDIR/libSDL3.so.0"
+              echo "bundled $(basename "$sdl_lib") as libSDL3.so.0"
+            fi
+          fi
+
       - name: Create archive
         shell: bash
         env:
@@ -948,7 +970,9 @@ jobs:
           # Name the single payload file explicitly rather than ".", so tar
           # does not store a leading "./" member that some extractors surface
           # as a phantom top-level "." folder (v0.6 release oversight).
-          tar -czf "${ARCHIVE_BASE}.tar.gz" -C artifact "${{ matrix.exe_name }}"
+          # Every file in artifact/, named explicitly (the binary, plus
+          # libSDL3.so.0 on shared-SDL3 legs).
+          tar -czf "${ARCHIVE_BASE}.tar.gz" -C artifact $(ls artifact)
           echo "archive_name=${ARCHIVE_BASE}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Upload artifact
