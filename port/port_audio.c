@@ -303,7 +303,7 @@ bool Port_Audio_Init(void) {
         return false;
     }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && defined(__aarch64__))
     /* Audio buffer size on Android is a latency-vs-stability tradeoff. A small
      * buffer (SDL default ~960 frames / 20 ms) keeps SFX latency low, but the
      * agbplay synth is CPU-heavy: MEASURED at ~15-17 ms of render work per 20 ms
@@ -323,7 +323,9 @@ bool Port_Audio_Init(void) {
      * cannot preempt the render/main threads. The buffer slack above is the
      * portable mitigation. The hint is left set (harmless; helps where allowed). */
     SDL_SetHint(SDL_HINT_THREAD_PRIORITY_POLICY, "1");
+#ifdef __ANDROID__
     SDL_SetHint(SDL_HINT_ANDROID_LOW_LATENCY_AUDIO, "1");
+#endif
     int frames = 0;
     const char* fenv = getenv("TMC_AUDIO_FRAMES");
     if (fenv && *fenv) {
@@ -359,6 +361,16 @@ bool Port_Audio_Init(void) {
             frames = 1920; /* ~40 ms — weak SoC needs the slack */
             fprintf(stderr, "[audio] weak CPU (%.2f GHz) -> larger audio buffer\n", maxkhz / 1e6);
         }
+#if !defined(__ANDROID__)
+        /* Linux aarch64 handhelds (the PortMaster targets) are all A53/A55
+         * class and run this through SDL2 via the sdl3shim, so there is no
+         * PipeWire cycle to match: take the slack by default. A 1.8 GHz
+         * TrimUI Smart Pro reported choppy audio at SDL's default buffer.
+         * TMC_AUDIO_FRAMES / audio_frames still override. */
+        if (frames == 0) {
+            frames = 2048; /* ~46 ms at 44.1 kHz */
+        }
+#endif
     }
     if (frames > 0) {
         char buf[16];

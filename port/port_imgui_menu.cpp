@@ -116,7 +116,20 @@ static float Port_UiScale(void) {
         if (v <= 0.0f) {
             int w = 0, h = 0;
             if (sUiScaleWindow) SDL_GetWindowSize(sUiScaleWindow, &w, &h);
-            v = (w > 0 && w < 400) ? 0.5f : 1.0f;
+            /* Scale with the window relative to the 640x480 the panels
+             * were sized for, so the overlay covers the same share of the
+             * screen on a 1280x720 TrimUI Smart Pro (1.5) as on a 640x480
+             * RG35XX SP (1.0), and shrinks on 320x240 (0.5). Reported by a
+             * TSP tester as "menu very hard to read" at the fixed 1.0. */
+            if (w > 0 && h > 0) {
+                const float sw = (float)w / 640.0f, sh = (float)h / 480.0f;
+                v = sw < sh ? sw : sh;
+                if (v < 0.5f) v = 0.5f;
+                if (v > 2.0f) v = 2.0f;
+                v = SDL_floorf(v * 20.0f) / 20.0f;
+            } else {
+                v = 1.0f;
+            }
         }
         sScale = v;
     }
@@ -194,9 +207,8 @@ extern "C" void Port_ImGui_Init(SDL_Window* window, SDL_Renderer* renderer) {
     io.FontGlobalScale = 1.4f;
     /* Small-display pass (Linux handhelds): the panels below are sized in
      * pixels for >=640 px wide windows. TMC_UI_SCALE=<float> scales fonts,
-     * style metrics and every fixed panel width; unset, it defaults to 0.5
-     * when the window is narrower than 400 px (e.g. a 320x240 X screen that
-     * a compositor upscales 2x), else 1.0. */
+     * style metrics and every fixed panel width; unset, it follows the
+     * window size relative to 640x480 (see Port_UiScale). */
     {
         sUiScaleWindow = window;
         const float s = Port_UiScale();
