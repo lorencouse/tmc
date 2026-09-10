@@ -4027,11 +4027,6 @@ struct ConsoleCat {
     void (*draw)(void);
     bool (*avail)(void); /* NULL = always shown */
     bool advanced;       /* hidden until "Show advanced groups" is on */
-    /* Settings in here change what the screen looks like, so the shell
-     * steps aside and shows the picture next to itself while the group is
-     * open -- see ConsolePreviewSplit. Left off (value-initialised false)
-     * for every group that has nothing to look at. */
-    bool preview;
 };
 
 static bool ConsoleCatRandoAvail(void) {
@@ -4039,7 +4034,7 @@ static bool ConsoleCatRandoAvail(void) {
 }
 
 static const ConsoleCat kConsoleCats[] = {
-    { "Display", "Screen size, frame rate, filters", DrawRibbonDisplayTab, nullptr, false, true },
+    { "Display", "Screen size, frame rate, filters", DrawRibbonDisplayTab, nullptr, false },
     { "Audio", "Volume, stereo width, reverb", DrawRibbonAudioTab, nullptr, false },
     { "Controls", "Button bindings and hotkeys", DrawRibbonControlsTab, nullptr, false },
     { "Save States", "Quick-save slots and previews", DrawRibbonSavesTab, nullptr, false },
@@ -4086,11 +4081,13 @@ static int ConsoleCatStep(int from, int dir) {
 /*   Preview split                                                     */
 /* ------------------------------------------------------------------ */
 /* Aspect mode, window scale, upscaler, filter, colour correction, LCD
- * persistence and the background fill are all judged by eye, and the
- * console shell covers the whole screen -- so the one thing the player
- * needs to see while changing them was the one thing hidden. Inside a
- * group marked `preview`, the shell shrinks to part of the screen and the
- * picture is fitted into the rest, live, while it is being changed.
+ * persistence and the background fill are all judged by eye, and a shell
+ * that covers the whole screen hides the one thing the player needs to
+ * see while changing them. So the shell never takes the whole screen: it
+ * keeps the larger share and the picture is fitted into the rest, live,
+ * for the whole time the menu is open. One layout for every group and for
+ * the group list -- stepping from Display to Audio with L1/R1 must not
+ * make the panel jump between half the screen and all of it.
  *
  * The picture is scaled down to fit its share, so this shows the *shape*
  * of a change (letterboxing, aspect, fill, colour, persistence) rather
@@ -4126,10 +4123,6 @@ static bool ConsolePreviewSplit(float outW, float outH, ConsolePreview* out) {
     if (!sImGuiInited || !out || outW <= 0.0f || outH <= 0.0f)
         return false;
     if (!Port_DebugMenu_IsOpen() || !Port_ImGui_ConsoleMode())
-        return false;
-    if (!sConsoleInCat || sConsoleCat < 0 || sConsoleCat >= kConsoleCatCount)
-        return false;
-    if (!kConsoleCats[sConsoleCat].preview)
         return false;
 
     /* Preferred orientation first, then the other one, then the same two at
@@ -4287,11 +4280,11 @@ static void DrawConsoleMenu(void) {
     if (!ConsoleCatVisible(sConsoleCat))
         sConsoleCat = ConsoleCatStep(sConsoleCat, +1);
 
-    /* Full-screen and near-opaque: on a 3.5" panel a floating panel over
-     * live gameplay is unreadable, and there is no second window to reach.
-     * The exception is a preview group, where the point is to see the
-     * picture: there the panel takes its share of the split and the PPU
-     * fits the frame into the rest. */
+    /* Near-opaque and pinned to its share of the split: on a 3.5" panel a
+     * floating panel over live gameplay is unreadable, and there is no
+     * second window to reach. The PPU fits the game frame into the rest.
+     * Screens too small to give the picture a whole GBA frame get the old
+     * full-screen shell -- a sliver of picture is worse than none. */
     ConsolePreview split;
     const bool previewing = ConsolePreviewSplit(io.DisplaySize.x, io.DisplaySize.y, &split);
     if (previewing) {
