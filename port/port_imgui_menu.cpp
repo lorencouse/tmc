@@ -4027,6 +4027,11 @@ struct ConsoleCat {
     void (*draw)(void);
     bool (*avail)(void); /* NULL = always shown */
     bool advanced;       /* hidden until "Show advanced groups" is on */
+    /* Settings in here change what the screen looks like, so the shell
+     * steps aside and shows the picture next to itself while the group is
+     * open -- see ConsolePreviewSplit. Left off (value-initialised false)
+     * for every group that has nothing to look at. */
+    bool preview;
 };
 
 static bool ConsoleCatRandoAvail(void) {
@@ -4034,7 +4039,7 @@ static bool ConsoleCatRandoAvail(void) {
 }
 
 static const ConsoleCat kConsoleCats[] = {
-    { "Display", "Screen size, frame rate, filters", DrawRibbonDisplayTab, nullptr, false },
+    { "Display", "Screen size, frame rate, filters", DrawRibbonDisplayTab, nullptr, false, true },
     { "Audio", "Volume, stereo width, reverb", DrawRibbonAudioTab, nullptr, false },
     { "Controls", "Button bindings and hotkeys", DrawRibbonControlsTab, nullptr, false },
     { "Save States", "Quick-save slots and previews", DrawRibbonSavesTab, nullptr, false },
@@ -4075,6 +4080,105 @@ static int ConsoleCatStep(int from, int dir) {
             return from;
     }
     return from;
+}
+
+/* ------------------------------------------------------------------ */
+/*   Preview split                                                     */
+/* ------------------------------------------------------------------ */
+/* Aspect mode, window scale, upscaler, filter, colour correction, LCD
+ * persistence and the background fill are all judged by eye, and the
+ * console shell covers the whole screen -- so the one thing the player
+ * needs to see while changing them was the one thing hidden. Inside a
+ * group marked `preview`, the shell shrinks to part of the screen and the
+ * picture is fitted into the rest, live, while it is being changed.
+ *
+ * The picture is scaled down to fit its share, so this shows the *shape*
+ * of a change (letterboxing, aspect, fill, colour, persistence) rather
+ * than its exact per-pixel look; closing the menu goes back to the real
+ * thing. Shape is what these settings are chosen by.
+ *
+ * Fractions, not pixels: the PPU asks in swapchain texels and the shell in
+ * ImGui points, and on a HiDPI window those differ.
+ *
+ * Split on the aspect of the output. The GBA frame is 3:2, so a wide
+ * screen loses less of it side-by-side than stacked; anything squarer
+ * stacks. Either way the panel keeps the larger share -- it carries a
+ * header, a scrolling body and the two-line footer legend. */
+struct ConsolePreview {
+    float picX, picY, picW, picH; /* the game frame's share */
+    float panX, panY, panW, panH; /* the settings panel's share */
+};
+/* The picture's share of the split, and the most it may grow to when the
+ * first choice leaves it smaller than one GBA frame. */
+static const float kPreviewPicShare = 0.46f;
+static const float kPreviewPicShareMax = 0.5f;
+
+/* A share is usable only if the picture still gets a whole GBA frame to
+ * scale into; below that there is nothing to judge and the panel should
+ * keep the screen. */
+static bool ConsolePreviewFits(bool sideBySide, float share, float outW, float outH) {
+    const float picW = sideBySide ? outW * share : outW;
+    const float picH = sideBySide ? outH : outH * share;
+    return picW >= (float)MODE1_GBA_WIDTH && picH >= 160.0f;
+}
+
+static bool ConsolePreviewSplit(float outW, float outH, ConsolePreview* out) {
+    if (!sImGuiInited || !out || outW <= 0.0f || outH <= 0.0f)
+        return false;
+    if (!Port_DebugMenu_IsOpen() || !Port_ImGui_ConsoleMode())
+        return false;
+    if (!sConsoleInCat || sConsoleCat < 0 || sConsoleCat >= kConsoleCatCount)
+        return false;
+    if (!kConsoleCats[sConsoleCat].preview)
+        return false;
+
+    /* Preferred orientation first, then the other one, then the same two at
+     * the wider share -- a 480x320 panel only clears the floor at 0.5 and
+     * side by side. Nothing fits on a screen smaller than about two GBA
+     * frames, and there the shell keeps the whole screen as before. */
+    const bool preferSide = (outW >= outH * 1.45f);
+    const struct {
+        bool side;
+        float share;
+    } candidates[] = {
+        { preferSide, kPreviewPicShare },
+        { !preferSide, kPreviewPicShare },
+        { preferSide, kPreviewPicShareMax },
+        { !preferSide, kPreviewPicShareMax },
+    };
+    for (const auto& c : candidates) {
+        if (!ConsolePreviewFits(c.side, c.share, outW, outH))
+            continue;
+        out->picX = 0.0f;
+        out->picY = 0.0f;
+        out->picW = c.side ? c.share : 1.0f;
+        out->picH = c.side ? 1.0f : c.share;
+        out->panX = c.side ? c.share : 0.0f;
+        out->panY = c.side ? 0.0f : c.share;
+        out->panW = c.side ? 1.0f - c.share : 1.0f;
+        out->panH = c.side ? 1.0f : 1.0f - c.share;
+        return true;
+    }
+    return false;
+}
+
+/* The area the game frame must fit inside this frame, in the caller's own
+ * units. False means "use the whole output", the normal case. */
+extern "C" bool Port_ImGui_PreviewViewport(int outW, int outH, int* x, int* y, int* w, int* h) {
+    ConsolePreview p;
+    if (outW <= 0 || outH <= 0 || !x || !y || !w || !h)
+        return false;
+    if (!ConsolePreviewSplit((float)outW, (float)outH, &p))
+        return false;
+    *x = (int)(p.picX * (float)outW);
+    *y = (int)(p.picY * (float)outH);
+    *w = (int)(p.picW * (float)outW);
+    *h = (int)(p.picH * (float)outH);
+    /* One GBA frame is the floor; a sliver of picture is worse than none.
+     * (port_widescreen.h carries MODE1_GBA_WIDTH but not the height.) */
+    if (*w < MODE1_GBA_WIDTH || *h < 160)
+        return false;
+    return true;
 }
 
 /* B / Escape, but only when it isn't already spoken for: ImGui routes the
@@ -4184,9 +4288,21 @@ static void DrawConsoleMenu(void) {
         sConsoleCat = ConsoleCatStep(sConsoleCat, +1);
 
     /* Full-screen and near-opaque: on a 3.5" panel a floating panel over
-     * live gameplay is unreadable, and there is no second window to reach. */
-    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+     * live gameplay is unreadable, and there is no second window to reach.
+     * The exception is a preview group, where the point is to see the
+     * picture: there the panel takes its share of the split and the PPU
+     * fits the frame into the rest. */
+    ConsolePreview split;
+    const bool previewing = ConsolePreviewSplit(io.DisplaySize.x, io.DisplaySize.y, &split);
+    if (previewing) {
+        ImGui::SetNextWindowPos(ImVec2(split.panX * io.DisplaySize.x, split.panY * io.DisplaySize.y),
+                                ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(split.panW * io.DisplaySize.x, split.panH * io.DisplaySize.y),
+                                 ImGuiCond_Always);
+    } else {
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    }
     ImGui::SetNextWindowBgAlpha(0.97f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 8));

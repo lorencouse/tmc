@@ -778,6 +778,19 @@ extern "C" bool Port_GPU_PresentFrame(const uint32_t* fb, int fb_w, int fb_h, in
      * BLURRED_FRAME. */
     int stageX = 0, stageY = 0, stageW = (int)swap_w, stageH = (int)swap_h;
     int frameX = 0, frameY = 0, frameW = (int)swap_w, frameH = (int)swap_h;
+    /* Preview split: while the settings shell is showing a group that
+     * changes what the picture looks like, it docks to part of the screen
+     * and the picture belongs in the area it left. Lay the stage out inside
+     * that area and shift it into place; the clear still covers the whole
+     * swapchain, so what the panel sits on stays background. */
+    int inX = 0, inY = 0, inW = (int)swap_w, inH = (int)swap_h;
+    const bool inset = Port_ImGui_PreviewViewport((int)swap_w, (int)swap_h, &inX, &inY, &inW, &inH);
+    if (!inset) {
+        inX = 0;
+        inY = 0;
+        inW = (int)swap_w;
+        inH = (int)swap_h;
+    }
     {
         const int FW = fb_w;
         const int FH = fb_h;
@@ -803,12 +816,12 @@ extern "C" bool Port_GPU_PresentFrame(const uint32_t* fb, int fb_w, int fb_h, in
                 /* "No constraint": stage spans the whole swapchain (see
                  * Port_PPU_ComputeViewportRects — identical for black fill,
                  * lets solid/blurred fills cover the entire monitor). */
-                aspW = (int)swap_w;
-                aspH = (int)swap_h;
+                aspW = inW;
+                aspH = inH;
                 break;
         }
-        const int w = (int)swap_w;
-        const int h = (int)swap_h;
+        const int w = inW;
+        const int h = inH;
 
         if (w * aspH >= h * aspW) {
             stageH = h;
@@ -846,6 +859,10 @@ extern "C" bool Port_GPU_PresentFrame(const uint32_t* fb, int fb_w, int fb_h, in
         }
         frameX = stageX + (stageW - frameW) / 2;
         frameY = stageY + (stageH - frameH) / 2;
+        stageX += inX;
+        stageY += inY;
+        frameX += inX;
+        frameY += inY;
     }
 
     SDL_GPUTextureSamplerBinding tsb = {};
