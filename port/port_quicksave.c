@@ -77,6 +77,8 @@
 #include "region.h" /* REGION_IS_EU/JP — per-region savestate isolation (#21) */
 #include "virtuappu.h" /* virtuappu_frame_buffer — slot thumbnails */
 
+#include "fade.h"
+
 #include "port_state_regions.h"
 
 extern u32 gRand; /* port_linked_stubs.c; restored on a cross-session resume */
@@ -283,6 +285,20 @@ static int ResumeFromSnapshot(const Slot* s) {
     gRoomTransition.player_status.area_next = rc->area;
     gRoomTransition.player_status.room_next = rc->room;
     memcpy(&gSave.saved_status, &gRoomTransition.player_status, sizeof(gRoomTransition.player_status));
+    /* Fade out to black first, because the room init we are about to enter
+     * *inverts* whatever fade is standing rather than setting one: a
+     * TRANSITION_FADE_BLACK_SLOW falls through InitRoomTransition() to
+     * SetFadeInverted(), which flips FADE_IN_OUT on the current type. The
+     * game's own continue reaches TASK_GAME from the file screen, where
+     * that standing fade is a finished fade-out, so the flip produces the
+     * fade-in. Loading from live gameplay the standing fade is a finished
+     * fade-*in*, so the same flip fades the picture out instead -- to
+     * white, if the last fade carried FADE_BLACK_WHITE -- and nothing ever
+     * fades it back: the room, its palettes and the audio all run on
+     * behind a blank screen. GameTask_Transition waits out gFadeControl
+     * before it does anything, so this both fixes the direction and gives
+     * the load the same fade-to-black-then-in as a continue. */
+    SetFade(FADE_IN_OUT | FADE_INSTANT, 8);
     SetTask(TASK_GAME);
     fprintf(stderr, "[quicksave] state is from an earlier session: resuming area=%u room=%u at (%d,%d) via the engine\n",
             rc->area, rc->room, pl->base.x.HALF.HI, pl->base.y.HALF.HI);
