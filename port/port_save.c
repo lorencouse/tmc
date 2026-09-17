@@ -41,6 +41,7 @@
 #include "port_types.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -111,14 +112,18 @@ static int WriteEepromDiskOrder(FILE* f) {
  * Returns 1 on success. */
 static int WriteEepromAtomic(const char* path) {
     char tmp[SAVE_FILENAME_MAX + 8];
-    if ((size_t)snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= sizeof(tmp))
+    if ((size_t)snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= sizeof(tmp)) {
+        errno = ENAMETOOLONG;
         return 0;
+    }
 
     FILE* f = fopen(tmp, "wb");
     if (!f)
         return 0;
 
     int ok = WriteEepromDiskOrder(f);
+    if (!ok && errno == 0)
+        errno = EIO;
     if (ok) {
         /* #20: a full buffer + failed flush/sync is exactly the ENOSPC/EIO
          * case — treat it as a failed write instead of reporting success. */
@@ -134,7 +139,9 @@ static int WriteEepromAtomic(const char* path) {
     if (fclose(f) != 0)
         ok = 0;
     if (!ok) {
+        const int saved = errno;
         remove(tmp);
+        errno = saved;
         return 0;
     }
 
@@ -145,7 +152,9 @@ static int WriteEepromAtomic(const char* path) {
     }
 #else
     if (rename(tmp, path) != 0) {
+        const int saved = errno;
         remove(tmp);
+        errno = saved;
         return 0;
     }
 #endif
@@ -231,6 +240,7 @@ static void LoadEepromFile(void) {
 static void FlushEepromFile(void) {
     if (!sEepromDirty)
         return;
+    errno = 0;
     if (WriteEepromAtomic(sActivePath)) {
         sEepromDirty = 0;
         if (sFlushFailedLast) {
@@ -241,7 +251,10 @@ static void FlushEepromFile(void) {
         /* Keep the dirty flag so the next flush retries; log once per
          * failure burst, not once per block write. */
         if (!sFlushFailedLast) {
-            fprintf(stderr, "[SAVE] ERROR: atomic write of %s failed; will retry.\n", sActivePath);
+            /* The cause is the one line a player can act on: "No space
+             * left on device" is the usual one on a handheld. */
+            fprintf(stderr, "[SAVE] ERROR: atomic write of %s failed (%s); will retry.\n", sActivePath,
+                    errno ? strerror(errno) : "unknown error");
             sFlushFailedLast = 1;
         }
     }

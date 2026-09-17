@@ -550,6 +550,9 @@ inline bool is_runtime_passthrough_path(const std::string& relative_path)
 inline bool write_binary_file_fwrite(const std::filesystem::path& output_path,
                                       const uint8_t* data, std::size_t size)
 {
+    if (PortAssetLog::WriteSuppressed(output_path)) {
+        return true;
+    }
     PortAssetLog::EnsureDir(output_path.parent_path());
     FILE* fp = nullptr;
 #ifdef _WIN32
@@ -584,6 +587,9 @@ inline bool write_binary_file(const std::filesystem::path& output_path, const ui
  * Windows where the per-call overhead is highest. */
 inline bool write_text_buffered(const std::filesystem::path& output_path, const std::string& contents)
 {
+    if (PortAssetLog::WriteSuppressed(output_path)) {
+        return true;
+    }
     PortAssetLog::EnsureDir(output_path.parent_path());
     static constexpr std::streamsize kBuf = 256 * 1024;
     /* CRITICAL: declare the backing buffer BEFORE the ofstream so it

@@ -63,6 +63,9 @@ bool LoadJsonFile(const std::filesystem::path& path, nlohmann::json& outJson, st
 
 bool WriteJsonFile(const std::filesystem::path& path, const nlohmann::json& json, std::string* error = nullptr,
                    int indent = 4) {
+    if (PortAssetLog::WriteSuppressed(path)) {
+        return true;
+    }
     PortAssetLog::EnsureDir(path.parent_path());
 
     std::ofstream output(path);
@@ -81,6 +84,9 @@ bool WriteJsonFile(const std::filesystem::path& path, const nlohmann::json& json
 
 bool WriteBinaryFile(const std::filesystem::path& path, const std::vector<uint8_t>& data,
                      std::string* error = nullptr) {
+    if (PortAssetLog::WriteSuppressed(path)) {
+        return true;
+    }
     PortAssetLog::EnsureDir(path.parent_path());
 
     std::ofstream output(path, std::ios::binary);
@@ -1540,6 +1546,9 @@ bool WriteIndexedBmp(const std::filesystem::path& outputPath, std::span<const ui
     const uint32_t imageSize = rowStride * height;
     const uint32_t fileSize = pixelDataOffset + imageSize;
 
+    if (PortAssetLog::WriteSuppressed(outputPath)) {
+        return true;
+    }
     PortAssetLog::EnsureDir(outputPath.parent_path());
     std::ofstream output(outputPath, std::ios::binary);
     if (!output.good()) {

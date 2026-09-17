@@ -1092,15 +1092,24 @@ bool EnsureAssetGroupCache() {
         if (!PortAssetPipeline::EnsureRuntimeAssetsBuilt(*editableRoot, runtimeRoot, &buildInfo)) {
             std::fprintf(stderr, "[ASSET] Failed to build runtime assets from %s: %s\n", editableRoot->string().c_str(),
                          buildInfo.c_str());
-            return false;
+            /* A broken editable tree (typically a truncated leftover from
+             * an interrupted on-device extraction) must not take the
+             * already-built runtime tree down with it. */
+            assetsRoot = FindRuntimeAssetsRoot();
+            if (assetsRoot.has_value()) {
+                std::fprintf(stderr, "[ASSET] Ignoring %s; using the existing runtime assets at %s. Delete the "
+                                     "assets_src directory if it is not a tree you edited.\n",
+                             editableRoot->string().c_str(), assetsRoot->string().c_str());
+            } else {
+                return false;
+            }
+        } else {
+            if (!buildInfo.empty()) {
+                std::fprintf(stderr, "[ASSET] Rebuilt runtime assets from %s (%s)\n", editableRoot->string().c_str(),
+                             buildInfo.c_str());
+            }
+            assetsRoot = runtimeRoot;
         }
-
-        if (!buildInfo.empty()) {
-            std::fprintf(stderr, "[ASSET] Rebuilt runtime assets from %s (%s)\n", editableRoot->string().c_str(),
-                         buildInfo.c_str());
-        }
-
-        assetsRoot = runtimeRoot;
     } else {
         assetsRoot = FindRuntimeAssetsRoot();
     }

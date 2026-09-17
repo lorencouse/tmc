@@ -127,6 +127,17 @@ void EnsureDir(const std::filesystem::path& dir);
 // the same process (otherwise unused).
 void ResetEnsureDirCache();
 
+/* Editable-tree suppression. The extractor writes the assets_src/ tree
+ * (24k pretty-printed files, ~120 MB, several GB of cluster slack on a
+ * big exFAT card) even when the caller asked for runtime_only and will
+ * delete it straight after. Rather than thread a flag through every
+ * writer, ExtractAssets registers the editable root here and every
+ * low-level writer (write_binary_file, write_text_buffered,
+ * BackgroundWriter::Submit, PortAssetPipeline::Write*) treats a path
+ * under it as already written. An empty root clears the suppression. */
+void SetSuppressedWriteRoot(const std::filesystem::path& root);
+bool WriteSuppressed(const std::filesystem::path& path);
+
 template <typename Index, typename Fn>
 void ParallelFor(Index begin, Index end, Fn body)
 {

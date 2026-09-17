@@ -274,6 +274,27 @@ bool ExtractAssets(const Options& opt, std::string* error) {
      * The standalone asset_extractor binary mirrors Rom into gRomData
      * itself in assets_extractor_main.cpp after this call returns. */
 
+    /* runtime_only: never put the editable tree on disk. Until now it
+     * was written in full (24k files) and deleted at the end, which on
+     * a handheld's SD card cost minutes and, with an interrupted run,
+     * left a truncated assets_src/ behind that the loader then preferred
+     * over the finished runtime tree. A leftover from such a run is
+     * wiped here since this extraction regenerates everything. The
+     * (empty) directory itself still exists during the run because
+     * WriteBuildStateFile enumerates it. */
+    struct SuppressGuard {
+        bool active = false;
+        ~SuppressGuard() {
+            if (active)
+                PortAssetLog::SetSuppressedWriteRoot({});
+        }
+    } suppress_guard;
+    if (opt.runtime_only) {
+        std::error_code ec;
+        std::filesystem::remove_all(opt.editable_root, ec);
+        PortAssetLog::SetSuppressedWriteRoot(opt.editable_root);
+        suppress_guard.active = true;
+    }
     if (!std::filesystem::exists(opt.editable_root)) {
         std::filesystem::create_directories(opt.editable_root);
     }
@@ -416,6 +437,12 @@ bool ExtractAssets(const Options& opt, std::string* error) {
     if (opt.runtime_only) {
         std::error_code ec;
         std::filesystem::remove_all(opt.editable_root, ec);
+        /* <root>/assets_src/<region> is gone; drop the now-empty parent
+         * too so nothing is left for FindEditableAssetsRoot to probe. */
+        const std::filesystem::path parent = opt.editable_root.parent_path();
+        if (parent.filename() == "assets_src" && std::filesystem::is_empty(parent, ec) && !ec) {
+            std::filesystem::remove(parent, ec);
+        }
     }
 
     const auto t1 = std::chrono::steady_clock::now();

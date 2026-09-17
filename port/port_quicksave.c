@@ -60,6 +60,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -511,7 +512,7 @@ static int WriteSlotToDisk(int slot) {
     SlotFilename(slot, path, sizeof(path));
     FILE* f = fopen(path, "wb");
     if (!f) {
-        fprintf(stderr, "[quicksave] open %s for write failed\n", path);
+        fprintf(stderr, "[quicksave] open %s for write failed (%s)\n", path, strerror(errno));
         return 0;
     }
     const u32 magic = MAGIC;
@@ -531,10 +532,15 @@ static int WriteSlotToDisk(int slot) {
         fclose(f);
         return 0;
     }
+    errno = 0;
     const size_t written = fwrite(s->snapshot, 1, s->bytes, f);
-    fclose(f);
-    if (written != s->bytes) {
-        fprintf(stderr, "[quicksave] short write %s (%zu/%zu)\n", path, written, s->bytes);
+    /* fwrite is buffered; ENOSPC usually surfaces in fclose's final flush. */
+    const int closed = fclose(f);
+    if (written != s->bytes || closed != 0) {
+        const int err = errno;
+        fprintf(stderr, "[quicksave] short write %s (%zu/%zu): %s\n", path, written, s->bytes,
+                err ? strerror(err) : "unknown error");
+        remove(path);
         return 0;
     }
     return 1;

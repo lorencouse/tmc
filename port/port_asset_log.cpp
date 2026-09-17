@@ -3,6 +3,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -180,6 +181,39 @@ void ResetEnsureDirCache()
     g_ensured_dirs.clear();
 }
 
+namespace {
+std::mutex g_suppress_mu;
+std::filesystem::path g_suppressed_root;
+std::atomic<bool> g_suppress_active{false};
+} // namespace
+
+void SetSuppressedWriteRoot(const std::filesystem::path& root)
+{
+    std::lock_guard<std::mutex> lk(g_suppress_mu);
+    g_suppressed_root = root.empty() ? std::filesystem::path{} : root.lexically_normal();
+    g_suppress_active.store(!g_suppressed_root.empty(), std::memory_order_release);
+}
+
+bool WriteSuppressed(const std::filesystem::path& path)
+{
+    if (!g_suppress_active.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_suppress_mu);
+    if (g_suppressed_root.empty()) {
+        return false;
+    }
+    const std::filesystem::path p = path.lexically_normal();
+    auto rit = g_suppressed_root.begin();
+    auto pit = p.begin();
+    for (; rit != g_suppressed_root.end(); ++rit, ++pit) {
+        if (pit == p.end() || *pit != *rit) {
+            return false;
+        }
+    }
+    return true;
+}
+
 BackgroundWriter& BackgroundWriter::Instance()
 {
     static BackgroundWriter instance;
@@ -193,6 +227,9 @@ BackgroundWriter::~BackgroundWriter()
 
 void BackgroundWriter::Submit(std::filesystem::path output_path, nlohmann::json json, int indent)
 {
+    if (WriteSuppressed(output_path)) {
+        return;
+    }
     /* Each dump runs on its own std::async task so the caller can start
      * the next phase immediately. The future is retained (so the task
      * isn't blocked-on at Submit time); Wait() drains them all. */
