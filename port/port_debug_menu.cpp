@@ -1239,7 +1239,17 @@ extern "C" void Port_DebugMenu_ToastFromExternal(const char* msg) {
     Toast(msg);
 }
 
+/* The save-state picker is a page of the same overlay rather than an
+ * overlay of its own: everything that makes the settings menu safe to
+ * open mid-play -- the frozen game, the masked GBA input, the pad routed
+ * into ImGui -- is keyed off sOpen, and a second window with its own copy
+ * of that would be two things to keep in step. The flag only steers which
+ * page port_imgui_menu.cpp draws. */
+static bool sStatePicker = false;
+static bool sStatePickerSave = false;
+
 extern "C" void Port_DebugMenu_Toggle(void) {
+    sStatePicker = false;
     if (sOpen) {
         sOpen = false;
         sPageStack.clear();
@@ -1248,6 +1258,21 @@ extern "C" void Port_DebugMenu_Toggle(void) {
         sPageStack.clear();
         sPageStack.push_back(BuildMainPage());
     }
+}
+
+extern "C" void Port_DebugMenu_OpenStatePicker(int saveMode) {
+    if (!sOpen)
+        Port_DebugMenu_Toggle();
+    sStatePicker = true;
+    sStatePickerSave = (saveMode != 0);
+}
+
+extern "C" bool Port_DebugMenu_StatePickerIsSave(void) {
+    return sStatePickerSave;
+}
+
+extern "C" bool Port_DebugMenu_StatePickerOpen(void) {
+    return sOpen && sStatePicker;
 }
 
 extern "C" bool Port_DebugMenu_IsOpen(void) {

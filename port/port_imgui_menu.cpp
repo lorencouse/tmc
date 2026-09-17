@@ -24,6 +24,7 @@
 #include <SDL3/SDL.h>
 #include "port_imgui_menu.h"
 #include <imgui.h>
+#include <imgui_internal.h> /* ImGui::RegisterUserTexture -- see SlotThumbnailRef */
 
 /* .glslp runtime hooks (port_glslp_runtime.cpp). File-scope so the F8
  * preset-picker lambda below can call them through C linkage. */
@@ -83,6 +84,9 @@ unsigned CheckGlobalFlag(unsigned flag);
  * legacy file exposes a small accessor API just for us. */
 extern "C" {
 bool Port_DebugMenu_IsOpen(void);
+void Port_DebugMenu_OpenStatePicker(int saveMode);
+bool Port_DebugMenu_StatePickerOpen(void);
+bool Port_DebugMenu_StatePickerIsSave(void);
 int Port_DebugMenu_PageDepth(void);
 const char* Port_DebugMenu_PageTitle(int depth);
 int Port_DebugMenu_PageItemCount(int depth);
@@ -479,6 +483,18 @@ static const struct {
     { PORT_INPUT_R, ImGuiKey_GamepadR1, SDLK_PAGEDOWN },
 };
 
+/* The picker puts two more actions on face buttons (save here, save to a
+ * new slot), so while it is up X and Y are injected as well. Only while it
+ * is up: ImGui's nav gives FaceUp its own job (enter text-input mode on a
+ * slider), and the settings pages are full of sliders. */
+static const struct {
+    PortInput input;
+    ImGuiKey nav;
+} kPickerNavMap[] = {
+    { PORT_INPUT_SOFT_X, ImGuiKey_GamepadFaceLeft },
+    { PORT_INPUT_SOFT_Y, ImGuiKey_GamepadFaceUp },
+};
+
 extern "C" bool Port_ImGui_HandleGameInputEvent(const SDL_Event* event) {
     if (!sImGuiInited || !event)
         return false;
@@ -512,6 +528,16 @@ extern "C" bool Port_ImGui_HandleGameInputEvent(const SDL_Event* event) {
             ImGui::GetIO().AddKeyEvent(m.nav, down);
         }
     }
+    if (!classic && Port_DebugMenu_StatePickerOpen()) {
+        for (const auto& m : kPickerNavMap) {
+            const bool match = down ? Port_Config_EventIsInputDown(event, m.input)
+                                    : Port_Config_EventIsInputUp(event, m.input);
+            if (!match)
+                continue;
+            consumed = true;
+            ImGui::GetIO().AddKeyEvent(m.nav, down);
+        }
+    }
     return consumed;
 }
 
@@ -524,6 +550,9 @@ static void ConsoleReleaseInjectedNav(void) {
         return;
     ImGuiIO& io = ImGui::GetIO();
     for (const auto& m : kConsoleNavMap) {
+        io.AddKeyEvent(m.nav, false);
+    }
+    for (const auto& m : kPickerNavMap) {
         io.AddKeyEvent(m.nav, false);
     }
 }
@@ -1112,7 +1141,15 @@ static bool SlotThumbnailRef(int slot, ImTextureRef* out) {
     const unsigned int gen = Port_QuickSave_SlotThumbnailGeneration(slot);
     if (!st.registered) {
         st.tex.Create(ImTextureFormat_RGBA32, w, h);
-        ImGui::GetPlatformIO().Textures.push_back(&st.tex);
+        /* RegisterUserTexture, not a push into platform_io.Textures: ImGui
+         * rebuilds that list every frame from its own atlases plus the
+         * *user* list, so a direct push is wiped before the renderer
+         * backend ever sees the request and the texture stays forever in
+         * WantCreate with no id -- which is why every slot preview drew as
+         * a plain white rectangle. It lives in imgui_internal.h and is
+         * marked experimental; it is also the only supported way for an
+         * application to own an ImTextureData. */
+        ImGui::RegisterUserTexture(&st.tex);
         st.registered = true;
         st.generation = 0;
     }
@@ -1125,6 +1162,14 @@ static bool SlotThumbnailRef(int slot, ImTextureRef* out) {
         st.tex.SetStatus(ImTextureStatus_WantCreate);
         st.generation = gen;
     }
+    /* The picker blows one of these up to 3-4x, and the backend creates its
+     * textures with linear filtering -- which turns a 120x80 decimation of
+     * pixel art into mush. Re-asserted every frame rather than once after
+     * creation: the upload path recreates the texture on every generation
+     * change, and a scale mode set before that is lost with it. Renderer
+     * path only; on the GPU backend the id is not an SDL_Texture. */
+    if (sRenderer && st.tex.Status == ImTextureStatus_OK && st.tex.GetTexID())
+        SDL_SetTextureScaleMode((SDL_Texture*)(intptr_t)st.tex.GetTexID(), SDL_SCALEMODE_NEAREST);
     *out = st.tex.GetTexRef();
     return true;
 }
@@ -1170,6 +1215,13 @@ static void DrawRibbonSavesTab(void) {
     ImGui::SameLine();
     if (ImGui::Button("Save to a new slot"))
         Port_DebugMenu_ToastFromExternal(Port_QuickSave_SaveToNewSlot() ? "Saved" : "Save FAILED");
+    ImGui::SameLine();
+    if (ImGui::Button("Open the state picker"))
+        Port_DebugMenu_OpenStatePicker(0);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Full-screen slot picker: one big preview at a time, "
+                          "A loads, X saves. Also on its own binding (End by "
+                          "default) so it opens without coming through here.");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Advances to the next slot and saves there, so repeated presses "
                           "leave a rolling history instead of overwriting one state.");
@@ -1362,6 +1414,344 @@ static void DrawRibbonSavesTab(void) {
     (void)DrawRegionLanguageControls(false);
 }
 
+/* ------------------------------------------------------------------ */
+/*   Save-state picker                                                 */
+/* ------------------------------------------------------------------ */
+/* The Saves tab above is a desktop table: 23 rows of radio buttons and
+ * paired Save/Load buttons, three D-pad levels deep inside the settings
+ * shell and sharing the screen with the live preview split. Fine for
+ * housekeeping, hopeless for the thing a player actually does mid-play --
+ * "show me my states and put me back in one of them, now".
+ *
+ * So the states also get their own full-screen page, opened straight from
+ * a button (PORT_INPUT_STATE_MENU) with no menu navigation in between:
+ * one big preview, the slot's age, a filmstrip of its neighbours, and
+ * A / X / Y doing load / save-here / save-new. This is the layout every
+ * emulator front-end on these handhelds uses, and it is a picker rather
+ * than a list because a preview is the only thing that tells two states
+ * of the same run apart.
+ *
+ * It reuses the settings overlay's open state (Port_DebugMenu_IsOpen), so
+ * the game is frozen, GBA input is masked and the pad reaches ImGui by
+ * exactly the paths the console shell already uses. Nothing here is a
+ * focusable widget: every press is read with IsKeyPressed, so there is no
+ * nav cursor to lose and the first D-pad press moves the slot instead of
+ * summoning a highlight. */
+
+/* Defined with the console shell further down; the picker borrows its
+ * header bar so the two pages read as one overlay. */
+static void DrawConsoleHeader(const char* title, const char* right);
+
+static int sPickerSlot = 0;
+static bool sPickerWasOpen = false;
+/* Which errand the page is on. Seeded from the button that opened it and
+ * switchable in place, so a player who reached for the wrong one is one
+ * press from the right page instead of backing out to the game. */
+static bool sPickerSaveMode = false;
+/* Frame the page opened on. The press that opens it is consumed by the
+ * event loop, but a button held across the transition (or a second action
+ * bound to the same key) would otherwise fire an action on the first frame,
+ * before the player has seen a single slot. */
+static int sPickerOpenedFrame = -1;
+
+/* Called when the overlay closes, so the next open re-seeds the cursor
+ * from the selected slot rather than resuming wherever it was left. */
+static void StatePickerReset(void) {
+    sPickerWasOpen = false;
+}
+
+/* "3 min ago" beats an absolute stamp for the one question a player asks
+ * of a state list; both are shown, because "yesterday 22:10" is what
+ * distinguishes last night's run from this morning's. */
+static void StatePickerFormatAge(unsigned long long ts, char* out, size_t cap) {
+    const long long now = (long long)time(NULL);
+    long long age = now - (long long)ts;
+    if (age < 0)
+        age = 0;
+    if (age < 45)
+        std::snprintf(out, cap, "just now");
+    else if (age < 90 * 60)
+        std::snprintf(out, cap, "%lld min ago", (age + 30) / 60);
+    else if (age < 36 * 3600)
+        std::snprintf(out, cap, "%lld h ago", (age + 1800) / 3600);
+    else
+        std::snprintf(out, cap, "%lld d ago", (age + 43200) / 86400);
+}
+
+static void StatePickerFormatStamp(unsigned long long ts, char* out, size_t cap) {
+    time_t tt = (time_t)ts;
+    struct tm tm_buf;
+#ifdef _WIN32
+    localtime_s(&tm_buf, &tt);
+#else
+    localtime_r(&tt, &tm_buf);
+#endif
+    std::strftime(out, cap, "%Y-%m-%d  %H:%M", &tm_buf);
+}
+
+static void StatePickerSlotName(int slot, char* out, size_t cap) {
+    const int autoBase = Port_QuickSave_AutoSlotBase();
+    if (slot < autoBase)
+        std::snprintf(out, cap, "Slot %d", slot + 1);
+    else
+        std::snprintf(out, cap, "Auto %d", slot - autoBase + 1);
+}
+
+/* Move the cursor, and carry the *selected* slot with it for manual slots
+ * so the bare save/load buttons act on whatever was last looked at here.
+ * The auto ring is loadable but never selectable -- its cursor overwrites
+ * those slots on its own schedule. */
+static void StatePickerMove(int delta) {
+    const int n = Port_QuickSave_SlotCount();
+    if (n <= 0)
+        return;
+    int s = sPickerSlot + delta;
+    while (s < 0)
+        s += n;
+    while (s >= n)
+        s -= n;
+    sPickerSlot = s;
+    if (s < Port_QuickSave_AutoSlotBase())
+        Port_QuickSave_SetSelectedSlot(s);
+}
+
+/* One thumbnail, drawn at `w`x`h` with an empty-slot placeholder of the
+ * same size so a row of them never changes height. */
+static void StatePickerThumb(int slot, float w, float h, bool current) {
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const ImVec2 p1 = ImVec2(p0.x + w, p0.y + h);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImTextureRef ref;
+    if (SlotThumbnailRef(slot, &ref)) {
+        ImGui::Image(ref, ImVec2(w, h));
+        ImGui::SetCursorScreenPos(p0);
+    } else {
+        dl->AddRectFilled(p0, p1, IM_COL32(18, 20, 24, 255));
+        const char* label = Port_QuickSave_HasSlot(slot) ? "no preview" : "EMPTY";
+        const ImVec2 ts = ImGui::CalcTextSize(label);
+        if (ts.x < w)
+            dl->AddText(ImVec2(p0.x + (w - ts.x) * 0.5f, p0.y + (h - ts.y) * 0.5f), IM_COL32(120, 120, 120, 255),
+                        label);
+    }
+    dl->AddRect(p0, p1, current ? IM_COL32(255, 240, 76, 255) : IM_COL32(90, 90, 90, 255), 0.0f, 0,
+                current ? 3.0f : 1.0f);
+    ImGui::Dummy(ImVec2(w, h));
+}
+
+static void DrawStatePicker(void) {
+    ImGuiIO& io = ImGui::GetIO();
+    const int n = Port_QuickSave_SlotCount();
+    const int autoBase = Port_QuickSave_AutoSlotBase();
+
+    if (!sPickerWasOpen) {
+        sPickerWasOpen = true;
+        sPickerSlot = Port_QuickSave_SelectedSlot();
+        sPickerOpenedFrame = ImGui::GetFrameCount();
+        sPickerSaveMode = Port_DebugMenu_StatePickerIsSave();
+    }
+    const bool settled = ImGui::GetFrameCount() > sPickerOpenedFrame;
+    if (sPickerSlot < 0 || sPickerSlot >= n)
+        sPickerSlot = 0;
+
+    const float ui = Port_UiScale();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.97f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 8));
+    if (ImGui::Begin("##state_picker", nullptr,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                         ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings)) {
+        char right[48];
+        if (sPickerSlot < autoBase)
+            std::snprintf(right, sizeof(right), "Slot %d / %d", sPickerSlot + 1, autoBase);
+        else
+            std::snprintf(right, sizeof(right), "Auto %d / %d", sPickerSlot - autoBase + 1, n - autoBase);
+        DrawConsoleHeader(sPickerSaveMode ? "SAVE STATE" : "LOAD STATE", right);
+
+        const bool parity = Port_Config_GetConsoleParity();
+        if (parity)
+            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f), "Console-Parity is ON: save-states are inert.");
+
+        /* Footer and filmstrip are reserved before the preview so the
+         * preview takes what is left rather than pushing them off the
+         * bottom -- the legend is the only place the buttons are written
+         * down, and there are no tooltips on a handheld. */
+        const float lineH = ImGui::GetTextLineHeightWithSpacing();
+        const float stripH = 44.0f * ui;
+        const float footerH = lineH * 2.0f + ImGui::GetStyle().ItemSpacing.y * 2.0f;
+        const float infoH = lineH;
+        float availH = ImGui::GetContentRegionAvail().y - stripH - footerH - infoH - ImGui::GetStyle().ItemSpacing.y * 3.0f;
+        const float availW = ImGui::GetContentRegionAvail().x;
+
+        int tw = 0, th = 0;
+        Port_QuickSave_ThumbnailSize(&tw, &th);
+        if (tw <= 0 || th <= 0) {
+            tw = 120;
+            th = 80;
+        }
+        /* Whole multiples only: the thumbnail is a 2:1 decimation of the
+         * GBA frame, and a fractional scale resamples pixel art into mush.
+         * Below 1x there is nothing to be done but let it shrink. */
+        float scale = availW / (float)tw;
+        const float scaleH = availH / (float)th;
+        if (scaleH < scale)
+            scale = scaleH;
+        if (scale >= 1.0f)
+            scale = SDL_floorf(scale);
+        else if (scale < 0.25f)
+            scale = 0.25f;
+        const float bigW = (float)tw * scale, bigH = (float)th * scale;
+        if (availH > bigH)
+            ImGui::Dummy(ImVec2(1.0f, (availH - bigH) * 0.5f));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - bigW) * 0.5f);
+        StatePickerThumb(sPickerSlot, bigW, bigH, false);
+
+        /* Slot name + when it was written, centred under the preview. */
+        {
+            char name[24], line[96];
+            StatePickerSlotName(sPickerSlot, name, sizeof(name));
+            const unsigned long long ts = Port_QuickSave_SlotTimestamp(sPickerSlot);
+            if (ts == 0) {
+                std::snprintf(line, sizeof(line), "%s  -  empty", name);
+            } else {
+                char stamp[32], age[32];
+                StatePickerFormatStamp(ts, stamp, sizeof(stamp));
+                StatePickerFormatAge(ts, age, sizeof(age));
+                std::snprintf(line, sizeof(line), "%s  -  %s  (%s)", name, stamp, age);
+            }
+            const float w = ImGui::CalcTextSize(line).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - w) * 0.5f);
+            ImGui::TextUnformatted(line);
+        }
+
+        /* Filmstrip: the neighbours, so moving the cursor reads as
+         * scrubbing a strip rather than paging blind through numbers.
+         * Centred on the cursor and clamped to the ends. */
+        {
+            const float sh = stripH;
+            const float sw = sh * (float)tw / (float)th;
+            const float gap = ImGui::GetStyle().ItemSpacing.x;
+            int fit = (int)((availW + gap) / (sw + gap));
+            if (fit < 1)
+                fit = 1;
+            if (fit > n)
+                fit = n;
+            int first = sPickerSlot - fit / 2;
+            if (first > n - fit)
+                first = n - fit;
+            if (first < 0)
+                first = 0;
+            const float rowW = fit * sw + (fit - 1) * gap;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - rowW) * 0.5f);
+            for (int i = 0; i < fit; ++i) {
+                if (i)
+                    ImGui::SameLine();
+                StatePickerThumb(first + i, sw, sh, first + i == sPickerSlot);
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.78f, 0.72f, 1.0f));
+        if (sPickerSlot < autoBase)
+            ImGui::TextUnformatted("Left/Right  slot     Up/Down  jump 5     L/R  jump 5");
+        else
+            ImGui::TextUnformatted("Auto-save ring: loadable, but saved into on its own schedule");
+        if (sPickerSaveMode)
+            ImGui::TextUnformatted("A  Save here      Y  switch to Load      B  Close");
+        else
+            ImGui::TextUnformatted("A  Load          X  switch to Save      B  Close");
+        ImGui::PopStyleColor();
+
+        /* Input. Read after the body, and never on the frame the page
+         * opened on -- see sPickerOpenedFrame. */
+        const bool left = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, true) ||
+                          ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true);
+        const bool rightP = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, true) ||
+                            ImGui::IsKeyPressed(ImGuiKey_RightArrow, true);
+        const bool up = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadUp, true) || ImGui::IsKeyPressed(ImGuiKey_UpArrow, true);
+        const bool downP =
+            ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown, true) || ImGui::IsKeyPressed(ImGuiKey_DownArrow, true);
+        const bool pageL =
+            ImGui::IsKeyPressed(ImGuiKey_GamepadL1, true) || ImGui::IsKeyPressed(ImGuiKey_PageUp, true);
+        const bool pageR =
+            ImGui::IsKeyPressed(ImGuiKey_GamepadR1, true) || ImGui::IsKeyPressed(ImGuiKey_PageDown, true);
+        if (!settled)
+            ; /* opening frame: draw the page, act on nothing */
+        else if (left)
+            StatePickerMove(-1);
+        else if (rightP)
+            StatePickerMove(+1);
+        else if (up || pageL)
+            StatePickerMove(-5);
+        else if (downP || pageR)
+            StatePickerMove(+5);
+
+        /* A is always the errand the page is on. The *other* errand's own
+         * button switches the page to it rather than acting straight away:
+         * X and Y are the two doors into here, and a player who came in the
+         * save door and taps the load button means "I wanted the other
+         * page", not "throw my progress away now".
+         *
+         * Insert/End rather than letters: the keyboard binds for the GBA
+         * buttons are letters ('s' is R, which this page reads as "jump 5
+         * slots"), and one press cannot mean both. They are also what the
+         * pad's X and Y send through gptokeyb2 on a handheld, so the same
+         * two buttons open the page and act on it. */
+        const bool primary = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) ||
+                             ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_Space, false);
+        const bool keySave = ImGui::IsKeyPressed(ImGuiKey_Insert, false) ||
+                             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false);
+        const bool keyLoad = ImGui::IsKeyPressed(ImGuiKey_End, false);
+        const bool doSave = (sPickerSaveMode && primary) || (sPickerSaveMode && keySave);
+        const bool doLoad = (!sPickerSaveMode && primary) || (!sPickerSaveMode && keyLoad);
+        const bool doSwitch = (sPickerSaveMode && keyLoad) || (!sPickerSaveMode && keySave);
+        const bool doSaveNew = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false) && !sPickerSaveMode;
+        const bool doClose = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+                             ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+
+        char msg[64];
+        if (!settled) {
+            /* opening frame: show the page, act on nothing */
+        } else if (doSwitch) {
+            sPickerSaveMode = !sPickerSaveMode;
+        } else if (parity && (doLoad || doSave || doSaveNew)) {
+            Port_DebugMenu_ToastFromExternal("Save-states disabled (Console-Parity)");
+        } else if (doLoad) {
+            const int how = Port_QuickSave_LoadSlot(sPickerSlot);
+            char name[24];
+            StatePickerSlotName(sPickerSlot, name, sizeof(name));
+            std::snprintf(msg, sizeof(msg),
+                          how == 2 ? "Loaded %s (room re-entered)" : how ? "Loaded %s" : "%s is empty", name);
+            Port_DebugMenu_ToastFromExternal(msg);
+            /* A load is the end of the errand: put the player back in the
+             * game rather than leaving them on the page they came for. */
+            if (how)
+                Port_DebugMenu_Toggle();
+        } else if (doSave) {
+            if (sPickerSlot >= autoBase) {
+                Port_DebugMenu_ToastFromExternal("The auto ring writes itself - pick a numbered slot");
+            } else {
+                std::snprintf(msg, sizeof(msg), Port_QuickSave_SaveSlot(sPickerSlot) ? "Saved to slot %d" : "Slot %d save FAILED",
+                              sPickerSlot + 1);
+                Port_DebugMenu_ToastFromExternal(msg);
+            }
+        } else if (doSaveNew) {
+            const int ok = Port_QuickSave_SaveToNewSlot();
+            sPickerSlot = Port_QuickSave_SelectedSlot();
+            std::snprintf(msg, sizeof(msg), ok ? "Saved to slot %d" : "Slot %d save FAILED", sPickerSlot + 1);
+            Port_DebugMenu_ToastFromExternal(msg);
+        } else if (doClose) {
+            Port_DebugMenu_Toggle();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
+
 static void DrawRibbonProfilesTab(void) {
     char names[32][64];
     const int n = Port_Save_ListProfiles(names, 32);
@@ -1529,6 +1919,10 @@ static const char* InputLabel(int input) {
             return "State slot: previous";
         case PORT_INPUT_STATE_SAVE_NEW:
             return "Save state to a new slot";
+        case PORT_INPUT_STATE_MENU_SAVE:
+            return "State picker: save";
+        case PORT_INPUT_STATE_MENU:
+            return "State picker: load";
         case PORT_INPUT_FAST_FORWARD:
             return "Fast-forward (hold)";
         default:
@@ -1547,6 +1941,7 @@ static void DrawRibbonControlsTab(void) {
             { "F5 / F6", "Save / load the selected state slot (rebindable below)" },
             { "Home", "Save to a *new* slot, rolling through them (rebindable)" },
             { "PgDn / PgUp", "Next / previous state slot (rebindable below)" },
+            { "Insert / End", "Save-state picker, ready to save / to load (rebindable)" },
             { "F1-F4", "Load save-state slot 2-5 directly  (Shift+Fn = save)" },
             { "F7", "Toggle text-to-speech" },
             { "F9", "Capture a bug report (screenshot + save + state)" },
@@ -4161,6 +4556,10 @@ extern "C" bool Port_ImGui_PreviewViewport(int outW, int outH, int* x, int* y, i
     ConsolePreview p;
     if (outW <= 0 || outH <= 0 || !x || !y || !w || !h)
         return false;
+    /* The picker is judged on its own previews, not on the live frame, and
+     * it wants every pixel for them. */
+    if (Port_DebugMenu_StatePickerOpen())
+        return false;
     if (!ConsolePreviewSplit((float)outW, (float)outH, &p))
         return false;
     *x = (int)(p.picX * (float)outW);
@@ -5027,6 +5426,7 @@ extern "C" bool Port_ImGui_BuildFrame(void) {
         sConsoleInCat = false;
         sConsoleRestoreCursor = false;
         sConsoleHelp = nullptr;
+        StatePickerReset();
     }
     if (!sPrevMenuOpen && menuOpen) {
         /* Put the cursor on a row the moment the menu opens, so the first
@@ -5100,7 +5500,10 @@ extern "C" bool Port_ImGui_BuildFrame(void) {
      * way in without the F8 hotkey. Console mode skips it: it is a click
      * target, and a handheld has no pointer to click it with — it would
      * just be a dead widget parked over the top-right of the game. */
-    if (!Port_ImGui_ConsoleMode()) {
+    if (Port_DebugMenu_StatePickerOpen()) {
+        /* The picker is a full-screen page with its own footer legend, and
+         * the desktop corner trigger lands on top of its header. */
+    } else if (!Port_ImGui_ConsoleMode()) {
         DrawMenuTrigger();
     } else if (!Port_DebugMenu_IsOpen() && !Port_Config_GetMenuHintSeen()) {
         /* Same one-shot discovery hint, as text rather than a button. */
@@ -5122,7 +5525,9 @@ extern "C" bool Port_ImGui_BuildFrame(void) {
     DrawQuitModal();
 
     if (Port_DebugMenu_IsOpen()) {
-        if (Port_ImGui_ConsoleMode()) {
+        if (Port_DebugMenu_StatePickerOpen()) {
+            DrawStatePicker();
+        } else if (Port_ImGui_ConsoleMode()) {
             DrawConsoleMenu();
         } else if (sRibbonEnabled) {
             DrawRibbon();

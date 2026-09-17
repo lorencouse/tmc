@@ -44,6 +44,16 @@ typedef enum {
      * "quick save" idiom, where repeated presses leave a rolling history
      * instead of overwriting one state. */
     PORT_INPUT_STATE_SAVE_NEW,
+    /* Open the full-screen save-state picker (previews, timestamps, one
+     * button per action). The other state hotkeys are blind: they act on
+     * whichever slot happens to be selected. These show the slots -- one
+     * opens it ready to save, the other ready to load, because "save" and
+     * "load" are two different errands and a player arriving at the page
+     * already knows which one they are on. Either page can switch to the
+     * other without closing. Keyboard defaults Insert and End; no pad
+     * defaults, same reasoning as above. */
+    PORT_INPUT_STATE_MENU_SAVE,
+    PORT_INPUT_STATE_MENU,
     /* Fast-forward. Unlike every other entry here this is a *held* action,
      * so port_bios.c watches both the down and the up edge. Was hard-wired
      * to TAB; TAB stays its keyboard default. */

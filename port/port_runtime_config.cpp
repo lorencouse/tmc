@@ -65,6 +65,9 @@ const std::array<Def, PORT_INPUT_COUNT> kDefaults = { {
     /* Home = save to a new slot; Tab keeps its historical fast-forward job,
      * now as a binding rather than a hard-wired case in the event loop. */
     { PORT_INPUT_STATE_SAVE_NEW, "state_save_new_slot", { "SDLK:0x4000004a" } },
+    /* Insert = the picker ready to save, End = ready to load. */
+    { PORT_INPUT_STATE_MENU_SAVE, "state_menu_save", { "SDLK:0x40000049" } },
+    { PORT_INPUT_STATE_MENU, "state_menu", { "SDLK:0x4000004d" } },
     { PORT_INPUT_FAST_FORWARD, "fast_forward", { "SDLK:0x00000009" } },
 } };
 

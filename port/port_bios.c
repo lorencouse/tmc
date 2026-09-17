@@ -299,6 +299,18 @@ static void Port_PumpEvents(void) {
             const bool wantsLoad = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_LOAD);
             const bool wantsNext = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_NEXT);
             const bool wantsPrev = Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_PREV);
+            /* The picker opens even under Console-Parity: it is a viewer as
+             * much as a control, and refusing to show a run's own states
+             * would be a puzzle rather than a guard. Its actions are the
+             * things that stay inert. */
+            if (Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_MENU_SAVE)) {
+                Port_DebugMenu_OpenStatePicker(1);
+                continue;
+            }
+            if (Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_MENU)) {
+                Port_DebugMenu_OpenStatePicker(0);
+                continue;
+            }
             if (wantsSave || wantsSaveNew || wantsLoad || wantsNext || wantsPrev) {
                 char msg[64];
                 /* Same rule as the F-key path: Console-Parity makes every

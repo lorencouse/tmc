@@ -12,6 +12,15 @@ struct SDL_Renderer;
 /* Toggle the debug menu overlay (typically bound to F8). */
 void Port_DebugMenu_Toggle(void);
 
+/* Open the overlay straight on the full-screen save-state picker (slot
+ * previews, timestamps, load/save on one button each). Bound to
+ * PORT_INPUT_STATE_MENU; the picker is a page of this same overlay, so
+ * Port_DebugMenu_IsOpen() is true while it is up and closing it is an
+ * ordinary Toggle. */
+void Port_DebugMenu_OpenStatePicker(int saveMode);
+bool Port_DebugMenu_StatePickerOpen(void);
+bool Port_DebugMenu_StatePickerIsSave(void);
+
 /* True while the debug menu is on screen. While open, GBA input is masked
  * and key events are routed to the menu instead of the game. */
 bool Port_DebugMenu_IsOpen(void);
