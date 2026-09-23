@@ -1506,9 +1506,7 @@ s32 GetIndexInKinstoneBag(KinstoneId kinstoneId) {
     return -1;
 }
 
-// For example if a chest from a fusion is opened, hide the chest marker
-void UpdateVisibleFusionMapMarkers(void) {
-    u32 kinstoneId;
+u32 GetFusionWorldEventId(u32 kinstoneId) {
     const KinstoneWorldEvent* gKinstoneWorldEvents_sel = gKinstoneWorldEvents;
     extern const KinstoneWorldEvent gKinstoneWorldEvents_eu[];
     extern const KinstoneWorldEvent gKinstoneWorldEvents_jp[];
@@ -1516,59 +1514,70 @@ void UpdateVisibleFusionMapMarkers(void) {
         gKinstoneWorldEvents_sel = gKinstoneWorldEvents_eu;
     else if (REGION_IS_JP)
         gKinstoneWorldEvents_sel = gKinstoneWorldEvents_jp;
-    for (kinstoneId = 10; kinstoneId <= 100; ++kinstoneId) {
-        if (CheckKinstoneFused(kinstoneId) && !CheckFusionMapMarkerDisabled(kinstoneId)) {
-            u32 worldEventId = gKinstoneWorldEvents_sel[kinstoneId].worldEventId;
-            const WorldEvent* s = &GetWorldEvents()[worldEventId];
-            u32 flag = s->flag;
-            u32 tmp;
-            switch (s->condition) {
-                case CND_0:
-                    tmp = 0;
-                    break;
-                case CND_1:
-                    tmp = s->bank;
-                    break;
-                case CND_2:
-                    tmp = 0xf;
-                    break;
-                case CND_3:
-                    tmp = 0x10;
-                    break;
-                case CND_4:
-                    tmp = 0x11;
-                    break;
+    return gKinstoneWorldEvents_sel[kinstoneId].worldEventId;
+}
+
+// Whether what a fusion made has been used up: its chest opened, its golden
+// enemy beaten, its butterfly caught. Always false for fusions with no such
+// condition (CND_0), whose map marker stays for good.
+bool32 CheckFusionEventDone(u32 kinstoneId) {
+    const WorldEvent* s = &GetWorldEvents()[GetFusionWorldEventId(kinstoneId)];
+    u32 flag = s->flag;
+    u32 tmp;
+    switch (s->condition) {
+        case CND_0:
+            tmp = 0;
+            break;
+        case CND_1:
+            tmp = s->bank;
+            break;
+        case CND_2:
+            tmp = 0xf;
+            break;
+        case CND_3:
+            tmp = 0x10;
+            break;
+        case CND_4:
+            tmp = 0x11;
+            break;
 #if (!defined(EU) && !defined(JP)) || defined(PC_PORT)
-                // Special conditions for BEANDEMO_00 to BEANDEMO_04
-                case CND_5:
-                    tmp = LOCAL_BANK_3;
-                    flag = SORA_10_H00;
-                    break;
-                case CND_6:
-                    tmp = LOCAL_BANK_3;
-                    flag = SORA_11_H00;
-                    break;
-                case CND_7:
-                    tmp = LOCAL_BANK_3;
-                    flag = SORA_12_T00;
-                    break;
-                case CND_8:
-                    tmp = LOCAL_BANK_3;
-                    flag = SORA_13_H00;
-                    break;
-                case CND_9:
-                    tmp = LOCAL_BANK_3;
-                    flag = SORA_14_T00;
-                    break;
-                case CND_10:
-                    tmp = LOCAL_BANK_4;
-                    flag = KS_B15;
-                    break;
+        // Special conditions for BEANDEMO_00 to BEANDEMO_04
+        case CND_5:
+            tmp = LOCAL_BANK_3;
+            flag = SORA_10_H00;
+            break;
+        case CND_6:
+            tmp = LOCAL_BANK_3;
+            flag = SORA_11_H00;
+            break;
+        case CND_7:
+            tmp = LOCAL_BANK_3;
+            flag = SORA_12_T00;
+            break;
+        case CND_8:
+            tmp = LOCAL_BANK_3;
+            flag = SORA_13_H00;
+            break;
+        case CND_9:
+            tmp = LOCAL_BANK_3;
+            flag = SORA_14_T00;
+            break;
+        case CND_10:
+            tmp = LOCAL_BANK_4;
+            flag = KS_B15;
+            break;
 #endif
-            }
-            if (sub_0807CB24(tmp, (REGION_IS_EU || REGION_IS_JP) ? s->flag : flag)) {
-                WriteBit(&gSave.kinstones.fusionUnmarked, kinstoneId);
-            }
+    }
+    return sub_0807CB24(tmp, (REGION_IS_EU || REGION_IS_JP) ? s->flag : flag);
+}
+
+// For example if a chest from a fusion is opened, hide the chest marker
+void UpdateVisibleFusionMapMarkers(void) {
+    u32 kinstoneId;
+    for (kinstoneId = 10; kinstoneId <= 100; ++kinstoneId) {
+        if (CheckKinstoneFused(kinstoneId) && !CheckFusionMapMarkerDisabled(kinstoneId) &&
+            CheckFusionEventDone(kinstoneId)) {
+            WriteBit(&gSave.kinstones.fusionUnmarked, kinstoneId);
         }
     }
 }

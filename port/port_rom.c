@@ -702,6 +702,23 @@ u64 Port_GetEntityFuserData(u32 kind, u8 id, u8 type, u8 type2) {
     return 0;
 }
 
+/* Walk the fuser tables Port_GetEntityFuserData searches: entry `index`
+ * (from 1; 0 is the sentinel) of the NPC or enemy table. An id/type byte of
+ * 0xFF is a wildcard. Returns 0 past the end. */
+int Port_GetFuserTableEntry(u32 kind, u32 index, u8* id, u8* type, u8* type2, u8* fuserId) {
+    if (!gRomOffsets || !gRomData || index == 0 || index >= 128) return 0;
+    u32 table = kind == ENEMY ? gRomOffsets->fuserEnemyData :
+                kind == NPC ? gRomOffsets->fuserNpcData : 0;
+    if (!table || table > gRomSize || (index + 1) * 6 > gRomSize - table) return 0;
+    const u8* entry = gRomData + table + index * 6;
+    if (!entry[0]) return 0;
+    *id = entry[0];
+    *type = entry[1];
+    *type2 = entry[2];
+    *fuserId = entry[3];
+    return 1;
+}
+
 /* ---- Active-ROM table accessors ----
  * Every reader bounds-checks against gRomSize and fails closed (NULL / 0)
  * when the active region has no offset (RomOffsets field == 0). */

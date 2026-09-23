@@ -62,6 +62,7 @@ extern "C" void Port_ApplyLanguage(void);
 #include "rando/rando_logic.h"
 #include "rando/rando_file_menu.h"
 #include "port_softslots.h"
+#include "port_tracker.h"
 #include "rando/rando_runtime.h"
 #include "rando/rando_keymap.h"
 #include "item_ids.h"
@@ -3219,41 +3220,6 @@ static bool RandoUi_CheckItemOwned(const char* name) {
     return false;
 }
 
-static bool RandoUi_LocationChecked(uint32_t loc_idx) {
-    uint32_t key = RandoLogic_GetLocationKeyAt(loc_idx);
-    if (key == UINT32_MAX)
-        return false;
-
-    if (key & 0x80000000u) {
-        uint32_t group = (key >> 16) & 0x7FFF;
-        uint32_t subkey = key & 0xFFFF;
-        if (group == RANDO_SCRIPTED_KEY_SPECIAL) {
-            switch (subkey) {
-                case RANDO_SPECIAL_KEY_BELL_HP:
-                    return CheckLocalFlagByBank(GetFlagBankOffset(2), 0xd0); /* Hyrule Town local flag 0xd0 */
-                case RANDO_SPECIAL_KEY_TINGLE_TROPHY:
-                    return GetInventoryValue(ITEM_QST_TINGLE_TROPHY) != 0;
-                case RANDO_SPECIAL_KEY_FORTRESS_PRIZE:
-                    return GetInventoryValue(ITEM_OCARINA) != 0;
-            }
-        }
-        return false;
-    }
-
-    uint32_t area = (key >> 16) & 0xFF;
-    uint32_t room = (key >> 8) & 0xFF;
-    uint32_t flag_or_chest = key & 0xFF;
-
-    unsigned flag = Rando_GetChestLocalFlag(area, room, flag_or_chest);
-    if (flag != 0xFF) {
-        unsigned offset = GetFlagBankOffset(area);
-        return CheckLocalFlagByBank(offset, flag) != 0;
-    } else {
-        unsigned offset = GetFlagBankOffset(area);
-        return CheckLocalFlagByBank(offset, flag_or_chest) != 0;
-    }
-}
-
 static bool sShowRandoTracker = false;
 
 /* One tracker grid/element cell: bracketed label, accent-colored when owned,
@@ -3269,18 +3235,18 @@ static void DrawRandoTrackerOverlay(void) {
     if (!sShowRandoTracker)
         return;
 
-    static bool sReached[RANDO_LOGIC_MAX_LOCATIONS] = {};
-    static bool sChecked[RANDO_LOGIC_MAX_LOCATIONS] = {};
+    /* Collected state from port_tracker (the Tracker group reads the same).
+     * There is no reachability here: RandoLogic_EvaluateReachability is a
+     * stub, and filtering on it left this list always empty. */
+    static std::vector<PortTrackerState> sState;
     static int sFrameThrottle = 15;
-    const uint32_t count = RandoLogic_GetLocationCountRaw();
+    const uint32_t count = (uint32_t)Port_Tracker_CheckCount();
 
-    if (++sFrameThrottle >= 15) {
+    if (++sFrameThrottle >= 15 || sState.size() != count) {
         sFrameThrottle = 0;
-        const uint16_t* active_table = Rando_GetRandomizedItemTable();
-        RandoLogic_EvaluateReachability(active_table, RandoUi_CheckItemOwned, sReached, count);
-        for (uint32_t i = 0; i < count; ++i) {
-            sChecked[i] = RandoUi_LocationChecked(i);
-        }
+        sState.resize(count);
+        for (uint32_t i = 0; i < count; ++i)
+            sState[i] = Port_Tracker_Available() ? Port_Tracker_CheckState(i) : PORT_TRACKER_UNTRACKED;
     }
 
     ImGui::SetNextWindowSize(ImVec2(600 * Port_UiScale(), 400 * Port_UiScale()), ImGuiCond_FirstUseEver);
@@ -3474,69 +3440,42 @@ static void DrawRandoTrackerOverlay(void) {
                 ImGui::TextDisabled("Filter by area/check name");
 
                 ImGui::BeginChild("##tracker_loc_list", ImVec2(0, 0), ImGuiChildFlags_Borders, 0);
-                char cur_area[48] = "";
+                /* Names are "Area - Check"; the table lists each area's
+                 * checks together, so a header per run of one area. */
+                std::string cur_area;
                 bool area_open = false;
-
                 for (uint32_t i = 0; i < count; ++i) {
-                    RandoLogicLocationType t = RandoLogic_GetLocationType(i);
-                    if (t == RANDO_LOGIC_LOCATION_HELPER)
+                    if (sState[i] == PORT_TRACKER_DONE)
                         continue;
-
-                    const char* name = RandoLogic_GetLocationName(i);
-                    if (name == nullptr || name[0] == '\0')
-                        continue;
-
-                    bool checked = sChecked[i];
-                    if (checked)
-                        continue;
-
-                    bool reached = sReached[i];
-                    if (!reached)
-                        continue;
-
+                    const char* name = Port_Tracker_CheckName(i);
                     if (sLocFilter.IsActive() && !sLocFilter.PassFilter(name))
                         continue;
-
-                    char area_name[48] = "Overworld";
-                    const char* under = std::strchr(name, '_');
-                    if (under != nullptr && (size_t)(under - name) < sizeof(area_name)) {
-                        std::memcpy(area_name, name, under - name);
-                        area_name[under - name] = '\0';
-                    }
-
-                    if (std::strcmp(cur_area, area_name) != 0) {
-                        std::snprintf(cur_area, sizeof(cur_area), "%s", area_name);
-                        int avail = 0;
+                    const char* dash = std::strstr(name, " - ");
+                    const std::string area = dash ? std::string(name, dash - name) : std::string("Other");
+                    if (area != cur_area) {
+                        cur_area = area;
+                        int left = 0;
                         for (uint32_t j = i; j < count; ++j) {
-                            const char* n = RandoLogic_GetLocationName(j);
-                            if (n == nullptr || RandoLogic_GetLocationType(j) == RANDO_LOGIC_LOCATION_HELPER)
-                                continue;
-                            if (sChecked[j] || !sReached[j])
+                            const char* n = Port_Tracker_CheckName(j);
+                            if (sState[j] == PORT_TRACKER_DONE || std::strncmp(n, area.c_str(), area.size()) != 0 ||
+                                std::strncmp(n + area.size(), " - ", 3) != 0)
                                 continue;
                             if (sLocFilter.IsActive() && !sLocFilter.PassFilter(n))
                                 continue;
-                            if (std::strncmp(n, cur_area, std::strlen(cur_area)) == 0 &&
-                                n[std::strlen(cur_area)] == '_') {
-                                ++avail;
-                            }
+                            ++left;
                         }
-                        char header[64];
-                        std::snprintf(header, sizeof(header), "%s (%d available)###area_%s", cur_area, avail, cur_area);
+                        char header[96];
+                        std::snprintf(header, sizeof(header), "%s (%d left)###area_%s", area.c_str(), left,
+                                      area.c_str());
                         area_open = ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen);
                     }
-
                     if (area_open) {
-                        const char* label = name;
-                        if (std::strncmp(label, cur_area, std::strlen(cur_area)) == 0 &&
-                            label[std::strlen(cur_area)] == '_') {
-                            label += std::strlen(cur_area) + 1;
-                        }
                         ImGui::Bullet();
                         ImGui::SameLine();
-                        ImGui::TextUnformatted(label);
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip("Logical check: %s", name);
-                        }
+                        if (sState[i] == PORT_TRACKER_UNTRACKED)
+                            ImGui::TextDisabled("%s (not tracked)", dash ? dash + 3 : name);
+                        else
+                            ImGui::TextUnformatted(dash ? dash + 3 : name);
                     }
                 }
                 ImGui::EndChild();
@@ -4471,6 +4410,194 @@ static void DrawRibbonMemoryTab(void) {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/*   Tracker                                                           */
+/* ------------------------------------------------------------------ */
+/* What is left in the loaded save: the randomizer's check list and the 100
+ * kinstone fusions, grouped by area, state read from gSave by port_tracker.c.
+ * The state is re-read every half second while the page is open rather than
+ * every frame: a check list walks room data, and nothing changes while the
+ * menu has the game paused anyway. */
+
+struct TrackerGroup {
+    std::string name;
+    std::vector<int> rows; /* check index or kinstone id */
+    int left = 0;          /* open or pending */
+    int tracked = 0;       /* rows with a known state */
+};
+
+static bool sTrackerShowFusions = false;
+static bool sTrackerHideDone = true;
+
+static void TrackerAddRow(std::vector<TrackerGroup>& groups, const std::string& name, int row, PortTrackerState st) {
+    TrackerGroup* g = nullptr;
+    for (TrackerGroup& it : groups) {
+        if (it.name == name) {
+            g = &it;
+            break;
+        }
+    }
+    if (g == nullptr) {
+        groups.push_back(TrackerGroup{ name, {}, 0, 0 });
+        g = &groups.back();
+    }
+    g->rows.push_back(row);
+    if (st != PORT_TRACKER_UNTRACKED)
+        g->tracked++;
+    if (st == PORT_TRACKER_OPEN || st == PORT_TRACKER_PENDING)
+        g->left++;
+}
+
+static void DrawTrackerRow(const char* label, PortTrackerState st) {
+    switch (st) {
+        case PORT_TRACKER_DONE:
+            ImGui::TextDisabled("  [x] %s", label);
+            break;
+        case PORT_TRACKER_PENDING:
+            ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f), "  [~] %s (reward waiting)", label);
+            break;
+        case PORT_TRACKER_UNTRACKED:
+            ImGui::TextDisabled("  [?] %s", label);
+            break;
+        default:
+            ImGui::Text("  [ ] %s", label);
+            break;
+    }
+}
+
+/* Under an unfused fusion: who has it on their list, and whether one of
+ * them is offering it now. */
+static void DrawTrackerFusers(unsigned kinstoneId) {
+    PortTrackerFuser fusers[8];
+    const size_t n = Port_Tracker_FusionFusers(kinstoneId, fusers, 8);
+    std::string line;
+    for (size_t i = 0; i < n && i < 8; ++i) {
+        if (!line.empty())
+            line += ", ";
+        line += fusers[i].name;
+        const char* area = fusers[i].area >= 0 ? Port_DebugQuery_AreaName((unsigned char)fusers[i].area) : nullptr;
+        if (area)
+            line += std::string(" (") + area + ")";
+        if (fusers[i].offering)
+            line += " - offering now";
+        else if (fusers[i].locked)
+            line += " - later in the story";
+    }
+    if (Port_Tracker_FusionShared(kinstoneId))
+        line += line.empty() ? "any fuser, at random" : ", or any fuser at random";
+    if (line.empty())
+        return;
+    ImGui::Indent(32.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+    ImGui::TextWrapped("from: %s", line.c_str());
+    ImGui::PopStyleColor();
+    ImGui::Unindent(32.0f);
+}
+
+static void DrawRibbonTrackerTab(void) {
+    if (!Port_Tracker_Available()) {
+        ImGui::TextWrapped("Load a save file to see what is left to find.");
+        return;
+    }
+
+    static std::vector<PortTrackerState> sCheckState;
+    static PortTrackerState sFusionState[PORT_TRACKER_FUSION_COUNT + 1];
+    static Uint64 sReadAt = 0;
+    const Uint64 now = SDL_GetTicks();
+    if (sCheckState.size() != Port_Tracker_CheckCount() || now - sReadAt >= 500) {
+        sReadAt = now;
+        sCheckState.resize(Port_Tracker_CheckCount());
+        for (size_t i = 0; i < sCheckState.size(); ++i)
+            sCheckState[i] = Port_Tracker_CheckState(i);
+        for (unsigned k = 1; k <= PORT_TRACKER_FUSION_COUNT; ++k)
+            sFusionState[k] = Port_Tracker_FusionState(k);
+    }
+
+    int checksDone = 0, checksTracked = 0, fusionsDone = 0, fusionsWaiting = 0;
+    for (PortTrackerState st : sCheckState) {
+        if (st != PORT_TRACKER_UNTRACKED)
+            checksTracked++;
+        if (st == PORT_TRACKER_DONE)
+            checksDone++;
+    }
+    for (unsigned k = 1; k <= PORT_TRACKER_FUSION_COUNT; ++k) {
+        if (sFusionState[k] == PORT_TRACKER_DONE)
+            fusionsDone++;
+        else if (sFusionState[k] == PORT_TRACKER_PENDING)
+            fusionsWaiting++;
+    }
+
+    ImGui::Text("Checks %d / %d", checksDone, checksTracked);
+    ImGui::SameLine(0, 24);
+    ImGui::Text("Fusions %d / %d", fusionsDone + fusionsWaiting, PORT_TRACKER_FUSION_COUNT);
+    if (fusionsWaiting > 0) {
+        ImGui::SameLine(0, 24);
+        ImGui::TextColored(ImVec4(0.95f, 0.80f, 0.30f, 1.0f), "%d rewards waiting", fusionsWaiting);
+    }
+
+    /* One button that flips the list: a single stop on the D-pad and one
+     * press of A, rather than a pair of radios to step between. */
+    if (ImGui::Button(sTrackerShowFusions ? "Showing fusions (A: checks)###view" : "Showing checks (A: fusions)###view"))
+        sTrackerShowFusions = !sTrackerShowFusions;
+    ImGui::Checkbox("Hide done", &sTrackerHideDone);
+
+    std::vector<TrackerGroup> groups;
+    if (sTrackerShowFusions) {
+        for (unsigned k = 1; k <= PORT_TRACKER_FUSION_COUNT; ++k) {
+            const int area = Port_Tracker_FusionArea(k);
+            const char* areaName = area >= 0 ? Port_DebugQuery_AreaName((unsigned char)area) : nullptr;
+            TrackerAddRow(groups, area < 0 ? "Gold fusions" : (areaName ? areaName : "Elsewhere"), (int)k,
+                          sFusionState[k]);
+        }
+    } else {
+        for (size_t i = 0; i < sCheckState.size(); ++i) {
+            const char* name = Port_Tracker_CheckName(i);
+            const char* dash = std::strstr(name, " - ");
+            TrackerAddRow(groups, dash ? std::string(name, dash - name) : std::string("Other"), (int)i,
+                          sCheckState[i]);
+        }
+    }
+
+    ImGui::Separator();
+    for (const TrackerGroup& g : groups) {
+        if (sTrackerHideDone && g.left == 0 && g.tracked == (int)g.rows.size())
+            continue;
+        char header[96];
+        if (g.left > 0)
+            std::snprintf(header, sizeof(header), "%s  (%d left)###%s", g.name.c_str(), g.left, g.name.c_str());
+        else
+            std::snprintf(header, sizeof(header), "%s###%s", g.name.c_str(), g.name.c_str());
+        if (!ImGui::CollapsingHeader(header))
+            continue;
+        for (int row : g.rows) {
+            if (sTrackerShowFusions) {
+                const PortTrackerState st = sFusionState[row];
+                if (sTrackerHideDone && st == PORT_TRACKER_DONE)
+                    continue;
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "#%u %s", (unsigned)row, Port_Tracker_FusionName((unsigned)row));
+                DrawTrackerRow(buf, st);
+                if (st == PORT_TRACKER_OPEN)
+                    DrawTrackerFusers((unsigned)row);
+            } else {
+                const PortTrackerState st = sCheckState[row];
+                if (sTrackerHideDone && st == PORT_TRACKER_DONE)
+                    continue;
+                const char* name = Port_Tracker_CheckName((size_t)row);
+                const char* dash = std::strstr(name, " - ");
+                DrawTrackerRow(dash ? dash + 3 : name, st);
+            }
+        }
+    }
+
+    if (!sTrackerShowFusions && checksTracked < (int)sCheckState.size()) {
+        ImGui::Spacing();
+        ImGui::TextWrapped("[?] %d checks leave no trace in the save (Stockwell's 300 slot and dog food, the "
+                           "first Bomb Minish reward, the Simulation chest), so they cannot be tracked.",
+                           (int)sCheckState.size() - checksTracked);
+    }
+}
+
 static void DrawRibbon(void) {
     ImGuiIO& io = ImGui::GetIO();
     const float ribbonW = io.DisplaySize.x;
@@ -4515,6 +4642,10 @@ static void DrawRibbon(void) {
             }
             if (ImGui::BeginTabItem("Equip")) {
                 DrawRibbonEquipTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Tracker")) {
+                DrawRibbonTrackerTab();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Controls")) {
@@ -4623,6 +4754,7 @@ static const ConsoleCat kConsoleCats[] = {
     { "Accessibility", "Speech, audio cues, readability", DrawRibbonAccessibilityTab, nullptr, false },
     { "Quality of Life", "Optional fixes and conveniences", DrawRibbonRebornTab, nullptr, false },
     { "Equipment", "Extra item slots", DrawRibbonEquipTab, nullptr, false },
+    { "Tracker", "Checks and kinstone fusions left", DrawRibbonTrackerTab, nullptr, false },
     { "Randomizer", "Seed, logic and cosmetics", DrawRibbonRandomizerTab, ConsoleCatRandoAvail, false },
     { "Items", "Give items, hearts, rupees", DrawRibbonItemsTab, nullptr, true },
     { "Warp", "Jump to any area", DrawRibbonWarpTab, nullptr, true },
@@ -4930,6 +5062,23 @@ static void DrawConsoleMenu(void) {
          * first press of Down lands on one. */
         if (ImGui::BeginChild("##console_body", ImVec2(0, -footerH), ImGuiChildFlags_NavFlattened)) {
             sConsoleHelp = nullptr;
+            /* The body is one child window for every page, so a new group
+             * would open at the list's scroll offset, and the first Down
+             * would move from where the cursor sat on the list -- on a
+             * long group, part-way down the page with its top out of view.
+             * A group opens at its top with the cursor on its first
+             * widget; the list keeps its own cursor restore. */
+            static int sShownPage = -2;
+            const int page = sConsoleInCat ? sConsoleCat : -1;
+            if (page != sShownPage) {
+                if (page >= 0) {
+                    ImGui::SetScrollY(0.0f);
+                    /* Nav init, not SetKeyboardFocusHere: that would put a
+                     * text field that happens to come first into editing. */
+                    ImGui::NavInitWindow(ImGui::GetCurrentWindow(), true);
+                }
+                sShownPage = page;
+            }
             if (sConsoleInCat) {
                 kConsoleCats[sConsoleCat].draw();
             } else {
