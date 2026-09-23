@@ -360,6 +360,14 @@ static void Port_PumpEvents(void) {
                 Port_RandoFileMenu_SetSidebarOpen(false);
                 Rando_PlayCancelSfx();
             }
+            /* Same pad-as-keyboard gap as the settings menu below: on a
+             * handheld B / A / D-pad arrive as 'z' / 'x' / arrows, which
+             * ImGui never sees as gamepad nav, so B could not cancel and
+             * "Close Sidebar" could not be reached. Console shell only --
+             * desktop keeps Escape / Enter / mouse as before. */
+            if (Port_ImGui_ConsoleMode()) {
+                Port_ImGui_HandleGameInputEvent(&e);
+            }
             continue;
         }
         /* Fast-forward, held. Bindable like everything else now -- it used to
