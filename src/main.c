@@ -302,6 +302,10 @@ void SetVBlankDMA(u16* src, u16* dest, u32 size) {
     gScreen.vBlankDMA.size = size;
     gScreen.vBlankDMA.ready = TRUE;
     gUnk_03003DE4[0] ^= 1;
+#ifdef PC_PORT
+    port_hdma_set_table_lines(160);
+    port_hdma_win0_spans_commit(src, dest == (u16*)REG_ADDR_WIN0H);
+#endif
 }
 
 void DisableVBlankDMA(void) {
@@ -338,13 +342,15 @@ u32 CheckRegionOnScreen(u32 x0, u32 y0, u32 x1, u32 y1) {
     /* Room-managed objects (including house doors) must spawn throughout
      * the rendered viewport, including its widescreen margins. */
     u32 width = Port_Widescreen_EffectiveViewWidth();
+    u32 height = Port_Widescreen_EffectiveViewHeight();
 #else
     u32 width = DISPLAY_WIDTH;
+    u32 height = DISPLAY_HEIGHT;
 #endif
     u32 x = ((gRoomControls.scroll_x - gRoomControls.origin_x) - x0 + width);
-    u32 y = ((gRoomControls.scroll_y - gRoomControls.origin_y) - y0 + DISPLAY_HEIGHT);
+    u32 y = ((gRoomControls.scroll_y - gRoomControls.origin_y) - y0 + height);
     u32 a = x1 + width;
-    u32 b = y1 + DISPLAY_HEIGHT;
+    u32 b = y1 + height;
     if ((x < a) && (y < b))
         result = TRUE;
     else

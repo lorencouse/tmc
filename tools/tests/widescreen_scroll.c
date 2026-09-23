@@ -29,6 +29,15 @@ int Port_Widescreen_CameraRestX(int x) {
     if (rest < gRoomControls.origin_x) rest = gRoomControls.origin_x;
     return rest;
 }
+int Port_Widescreen_CameraRestY(int y) {
+    /* Native height: the GBA's centre-at-80, clamped inside the room. */
+    int rest = y - 80;
+    int max = gRoomControls.origin_y + gRoomControls.height - 160;
+    if (rest > max) rest = max;
+    if (rest < gRoomControls.origin_y) rest = gRoomControls.origin_y;
+    return rest;
+}
+int Port_Widescreen_EffectiveViewHeight(void) { return 160; }
 void UpdateScreenShake(void) {}
 void UpdateScrollVram(void) {
     if (gUpdateVisibleTiles == 1) {

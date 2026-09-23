@@ -96,6 +96,19 @@ int Port_Widescreen_TargetViewWidth(void);
  * effective view width of 240. */
 int Port_Widescreen_CameraRestX(int target_x);
 
+/* Tall view (zoom-out): TMC_WS_VIEW_HEIGHT=<px> (161..MODE1_MAX_FRAME_HEIGHT)
+ * asks for a taller gameplay frame, e.g. 320x240 for an exact 2x on a
+ * 640x480 panel. It is all-or-nothing: a room that cannot fill the full
+ * target width AND height runs native 240x160 instead, so the frame is
+ * always either the target or native (both fill a 4:3 panel when stretched).
+ * TargetViewHeight is 160 when unset. EffectiveViewHeight is the live
+ * gameplay height (160 whenever widescreen is inactive/falling back).
+ * CameraRestY is CameraRestX's vertical twin and must stay the only formula
+ * for the camera's rest y for the same equality-wait reason. */
+int Port_Widescreen_TargetViewHeight(void);
+int Port_Widescreen_EffectiveViewHeight(void);
+int Port_Widescreen_CameraRestY(int target_y);
+
 #ifdef __cplusplus
 }
 #endif

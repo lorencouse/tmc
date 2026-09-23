@@ -28,7 +28,9 @@ def main():
         'int Port_Widescreen_CameraRestX(int target_x)',
         'static void Port_WidescreenShadow_Populate(',
         'static void Port_WidescreenShadow_PopulateOverlay(',
+        'static void Port_TallShadow_Populate(',
         'static int Port_WidescreenPpuBgForControl(',
+        'static int Port_LightRayCanvasActive(',
     )]
     functions.append(function(message, 'bool Message_GetWindowRect('))
     functions.append(function(stubs, 'void Port_Widescreen_UpdateShadows(void)'))

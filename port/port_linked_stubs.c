@@ -18,6 +18,7 @@
 #include "main.h"
 #include "map.h"
 #include "manager/diggingCaveEntranceManager.h"
+#include "manager/lightRayManager.h"
 #include "menu.h"
 #include "message.h"
 #include "npc.h"
@@ -1007,6 +1008,8 @@ void UpdateScrollVram(void) {
 static u16 sWsShadowBG1[MODE1_WS_SHADOW_ROWS * MODE1_WS_SHADOW_COLS];
 static u16 sWsShadowBG2[MODE1_WS_SHADOW_ROWS * MODE1_WS_SHADOW_COLS];
 static u16 sWsShadowOverlay[MODE1_WS_SHADOW_ROWS * MODE1_WS_SHADOW_COLS];
+static u16 sTallShadowBottom[MODE1_TALL_SHADOW_ROWS * MODE1_TALL_SHADOW_COLS];
+static u16 sTallShadowTop[MODE1_TALL_SHADOW_ROWS * MODE1_TALL_SHADOW_COLS];
 
 /* ---- Runtime widescreen gate --------------------------------------------
  * `--widescreen_width=N` only reserves a wider framebuffer. True widescreen
@@ -1102,6 +1105,20 @@ int Port_Widescreen_TargetViewWidth(void) {
     return w;
 }
 
+int Port_Widescreen_TargetViewHeight(void) {
+    static int env_h = -1;
+    if (env_h < 0) {
+        const char* e = getenv("TMC_WS_VIEW_HEIGHT");
+        env_h = 160;
+        if (e && *e) {
+            int v = atoi(e);
+            if (v > 160 && v <= MODE1_MAX_FRAME_HEIGHT)
+                env_h = v;
+        }
+    }
+    return env_h;
+}
+
 /* Widest view the current room can honestly feed: the window-aspect target
  * capped by the room's own width. Rooms narrower than the window target but
  * wider than 240 (0x100/0x110 rooms — most dungeons and larger interiors)
@@ -1134,6 +1151,12 @@ int Port_Widescreen_FallbackNative(void) {
     if (eff <= 240) {
         return 1; /* one-screen room (<=240px): no extra world to reveal */
     }
+    /* Tall view is all-or-nothing (see port_widescreen.h): the room must
+     * fill the whole target, or the frame would need borders. */
+    if (Port_Widescreen_TargetViewHeight() > 160 &&
+        (eff < Port_Widescreen_TargetViewWidth() || (s32)gRoomControls.height < Port_Widescreen_TargetViewHeight())) {
+        return 1;
+    }
     /* Room wider than its painted content: the map can't fill even the
      * room-capped view with the camera pinned left -> permanent void strip.
      * Render native 240 (GBA-identical framing, presented pillarboxed).
@@ -1163,6 +1186,27 @@ int Port_Widescreen_EffectiveViewWidth(void) {
     }
     eff = Port_WidescreenEffectiveTarget();
     return eff > 240 ? (int)eff : 240;
+}
+
+int Port_Widescreen_EffectiveViewHeight(void) {
+    if (!Port_Widescreen_IsActive()) {
+        return 160;
+    }
+    return Port_Widescreen_TargetViewHeight();
+}
+
+int Port_Widescreen_CameraRestY(int target_y) {
+    int viewH = Port_Widescreen_EffectiveViewHeight();
+    int lo = (int)gRoomControls.origin_y;
+    int hi = lo + (int)gRoomControls.height - viewH;
+    int want = target_y - viewH / 2;
+    if (want > hi) {
+        want = hi;
+    }
+    if (want < lo) {
+        want = lo;
+    }
+    return want;
 }
 
 /* Single source of truth for the camera's rest x (see port_widescreen.h).
@@ -1306,6 +1350,40 @@ static void Port_WidescreenShadow_Populate(int bg_index, u16* mapSpecial, u16* s
     virtuappu_mode1_ws_shadow[bg_index] = shadow;
 }
 
+/* Tall view: the whole-view shadow (layout in mode1.h). Cell [r][c] is what
+ * the engine fill (ram_sub_080B197C_c) would put in VRAM row r, col c - 1
+ * if the screenblock were big enough: map row 2*row16 - 1 + r (row 0 is the
+ * duplicated top row when ydiff < 8), map col 2*col16 - 1 + c. */
+static void Port_TallShadow_Populate(int bg_index, const u16* mapSpecial, u16* shadow) {
+    enum { kMapStride = 128, kMapRows = 128 };
+    s16 xdiff = (s16)(gRoomControls.scroll_x - gRoomControls.origin_x);
+    s16 ydiff = (s16)(gRoomControls.scroll_y - gRoomControls.origin_y);
+    s32 base_row = 2 * (ydiff >> 4) - 1;
+    s32 base_col = 2 * (xdiff >> 4) - 1;
+    s32 room_tiles_w = (s32)gRoomControls.width / 8;
+    s32 room_tiles_h = (s32)gRoomControls.height / 8;
+    if (room_tiles_w > kMapStride)
+        room_tiles_w = kMapStride;
+    if (room_tiles_h > kMapRows)
+        room_tiles_h = kMapRows;
+    for (int r = 0; r < MODE1_TALL_SHADOW_ROWS; r++) {
+        u16* row_dst = shadow + (size_t)r * MODE1_TALL_SHADOW_COLS;
+        s32 world_row = base_row + r;
+        if (ydiff >= 0 && ydiff < 8 && r == 0)
+            world_row = 0;
+        if (world_row < 0 || world_row >= room_tiles_h) {
+            memset(row_dst, 0, MODE1_TALL_SHADOW_COLS * sizeof(u16));
+            continue;
+        }
+        const u16* row_src = mapSpecial + (size_t)world_row * kMapStride;
+        for (int c = 0; c < MODE1_TALL_SHADOW_COLS; c++) {
+            s32 world_col = base_col + c;
+            row_dst[c] = (world_col >= 0 && world_col < room_tiles_w) ? row_src[world_col] : (u16)0;
+        }
+    }
+    virtuappu_mode1_tall_shadow[bg_index] = shadow;
+}
+
 /* Fog, clouds and steam use a repeating 256px texture, not the room map.
  * Copy its complete screenblock so even HBlank-varying scroll offsets use
  * the same tiles on both sides of x=240. Existing CPU/GPU shadow sampling
@@ -1338,10 +1416,24 @@ static int Port_WidescreenPpuBgForControl(u32 control) {
     return -1;
 }
 
+/* LightRayManager's screen-pinned mode (state 4, sub_08057450: BG3 at a
+ * fixed x of 16, sliding only vertically) and its fade-out (state 3). States
+ * 1 and 2 are the drifting ray texture, which wraps like fog. */
+static int Port_LightRayCanvasActive(void) {
+    if (gScreen.bg3.control != 0x1e04 || !(gScreen.lcd.displayControl & DISPCNT_BG3_ON))
+        return 0;
+    LightRayManager* m = (LightRayManager*)DeepFindEntityByID(MANAGER, LIGHT_RAY_MANAGER);
+    return m != NULL && (m->unk_21 == 3 || m->unk_21 == 4);
+}
+
 /* Called per-VBlank from src/interrupts.c::UpdateDisplayControls. */
 void Port_Widescreen_UpdateShadows(void) {
-    for (int i = 0; i < MODE1_GBA_BG_COUNT; i++)
+    for (int i = 0; i < MODE1_GBA_BG_COUNT; i++) {
         virtuappu_mode1_ws_shadow[i] = NULL;
+        virtuappu_mode1_tall_shadow[i] = NULL;
+        virtuappu_mode1_bg_stretch[i] = 0;
+    }
+    virtuappu_mode1_tall_hud_split = 0;
     virtuappu_mode1_ws_hud_right_anchor = 0;
     virtuappu_mode1_ws_msg_shift = 0;
 
@@ -1419,13 +1511,59 @@ void Port_Widescreen_UpdateShadows(void) {
         if (bg >= 0)
             Port_WidescreenShadow_Populate(bg, gMapDataTopSpecial, sWsShadowBG2);
     }
+    if (Port_Widescreen_EffectiveViewHeight() > 160) {
+        if (gMapBottom.bgSettings != NULL) {
+            int bg = Port_WidescreenPpuBgForControl(gMapBottom.bgSettings->control);
+            if (bg >= 0)
+                Port_TallShadow_Populate(bg, gMapDataBottomSpecial, sTallShadowBottom);
+        }
+        if (gMapTop.bgSettings != NULL) {
+            int bg = Port_WidescreenPpuBgForControl(gMapTop.bgSettings->control);
+            if (bg >= 0)
+                Port_TallShadow_Populate(bg, gMapDataTopSpecial, sTallShadowTop);
+        }
+        virtuappu_mode1_tall_hud_split = 1;
+    }
+    /* The Minish Woods sunshine (and the barrel house's) is a 240x160
+     * picture pinned to the screen, not a texture: wrapping it leaves the
+     * right edge and the bottom empty. Stretch it to the frame instead. */
+    if (Port_LightRayCanvasActive()) {
+        virtuappu_mode1_bg_stretch[3] = 1;
+    }
     /* Extend known repeating overlays only; other BG3 canvases stay native.
      * CloudOverlayManager uses priority 1; Woods and steam use priority 0. */
-    if (((gRoomControls.area == AREA_MINISH_WOODS && gScreen.bg3.control == 0x1e04) ||
+    else if (((gRoomControls.area == AREA_MINISH_WOODS && gScreen.bg3.control == 0x1e04) ||
          (gRoomControls.area == AREA_HYRULE_FIELD && gScreen.bg3.control == 0x1e05) ||
          (gRoomControls.area == AREA_CAVE_OF_FLAMES && gScreen.bg3.control == 0x1e04)) &&
         (gScreen.lcd.displayControl & DISPCNT_BG3_ON) && virtuappu_mode1_ws_shadow[3] == NULL) {
         Port_WidescreenShadow_PopulateOverlay((const u16*)(gVram + 0xf000), sWsShadowOverlay);
+    }
+    /* Tall view: any other 256x256 BG (parallax skies, boss-room and cutscene
+     * backdrops) holds no pixels past x=240 and only the rest of its canvas
+     * below line 160, which drew an L of backdrop around the picture. Show
+     * the GBA's view of it scaled to the frame instead. BG0 is the HUD. */
+    if (Port_Widescreen_EffectiveViewHeight() > 160) {
+        const u32 controls[] = { gScreen.bg0.control, gScreen.bg1.control, gScreen.bg2.control,
+                                 gScreen.bg3.control };
+        for (int i = 1; i < MODE1_GBA_BG_COUNT; i++) {
+            if ((gScreen.lcd.displayControl & (DISPCNT_BG0_ON << i)) && (controls[i] >> 14) == 0 &&
+                virtuappu_mode1_ws_shadow[i] == NULL && virtuappu_mode1_tall_shadow[i] == NULL) {
+                virtuappu_mode1_bg_stretch[i] = 1;
+            }
+        }
+    }
+    if (getenv("TMC_WS_TRACE") != NULL) {
+        static int sLastStretch = -1;
+        int mask = 0;
+        for (int i = 0; i < MODE1_GBA_BG_COUNT; i++) {
+            mask |= virtuappu_mode1_bg_stretch[i] ? 1 << i : 0;
+        }
+        if (mask != sLastStretch) {
+            sLastStretch = mask;
+            fprintf(stderr, "[ws] area=0x%02x room=0x%02x stretch=0x%x bg1=%04x bg2=%04x bg3=%04x\n",
+                    (unsigned)gRoomControls.area, (unsigned)gRoomControls.room, (unsigned)mask,
+                    (unsigned)gScreen.bg1.control, (unsigned)gScreen.bg2.control, (unsigned)gScreen.bg3.control);
+        }
     }
 }
 #else
@@ -1452,6 +1590,24 @@ void Port_Widescreen_SetWindowPixels(int w, int h) {
 }
 int Port_Widescreen_TargetViewWidth(void) {
     return 240;
+}
+int Port_Widescreen_TargetViewHeight(void) {
+    return 160;
+}
+int Port_Widescreen_EffectiveViewHeight(void) {
+    return 160;
+}
+int Port_Widescreen_CameraRestY(int target_y) {
+    int lo = (int)gRoomControls.origin_y;
+    int hi = lo + (int)gRoomControls.height - 160;
+    int want = target_y - 80;
+    if (want > hi) {
+        want = hi;
+    }
+    if (want < lo) {
+        want = lo;
+    }
+    return want;
 }
 int Port_Widescreen_CameraRestX(int target_x) {
     /* GBA-exact: center at 120, clamp view inside the room. */
@@ -2395,7 +2551,7 @@ u32 CheckRectOnScreen(s32 x, s32 y, u32 halfW, u32 halfH) {
         return 0;
     s32 sy = gRoomControls.scroll_y - gRoomControls.origin_y;
     u32 dy = (u32)(y - sy + halfH);
-    if (dy >= halfH * 2 + 0xA0)
+    if (dy >= halfH * 2 + (u32)Port_Widescreen_EffectiveViewHeight())
         return 0;
     return 1;
 }

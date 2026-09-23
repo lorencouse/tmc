@@ -4511,6 +4511,12 @@ void InitializeCamera() {
 #endif
     roomControls->scroll_x += roomControls->origin_x;
 
+#if MODE1_GBA_WIDTH > 240
+    {
+        extern int Port_Widescreen_CameraRestY(int target_y);
+        roomControls->scroll_y = Port_Widescreen_CameraRestY(targetY + roomControls->origin_y) - roomControls->origin_y;
+    }
+#else
     if (targetY < 0x50) {
         roomControls->scroll_y = 0;
     } else {
@@ -4520,6 +4526,7 @@ void InitializeCamera() {
             roomControls->scroll_y = targetY - 0x50;
         }
     }
+#endif
     roomControls->scroll_y += roomControls->origin_y;
 
     if (roomControls->camera_target != NULL) {

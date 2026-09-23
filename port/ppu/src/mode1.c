@@ -37,6 +37,12 @@ int virtuappu_mode1_ws_msg_x0 = 0;
 int virtuappu_mode1_ws_msg_x1 = 0;
 int virtuappu_mode1_ws_msg_y0 = 0;
 int virtuappu_mode1_ws_msg_y1 = 0;
+/* Tall view (see mode1.h). NULL / MODE1_OBJ_Y_NONE = inactive. */
+uint16_t* virtuappu_mode1_tall_shadow[MODE1_GBA_BG_COUNT] = { NULL, NULL, NULL, NULL };
+int16_t virtuappu_mode1_obj_y_full[MODE1_GBA_OAM_COUNT];
+int virtuappu_mode1_tall_hud_split = 0;
+int virtuappu_mode1_bg_stretch[MODE1_GBA_BG_COUNT] = { 0, 0, 0, 0 };
+const int16_t (*virtuappu_mode1_win0_spans)[2] = NULL;
 
 typedef struct Mode1OAMAttr {
     uint16_t attr0;
@@ -89,6 +95,7 @@ static VirtuaPPUMode1GbaMemory mode1_memory = { mode1_default_io_mem, mode1_defa
 
 static int mode1_frame_width = MODE1_GBA_WIDTH;
 static int mode1_frame_pitch = MODE1_GBA_WIDTH;
+static int mode1_frame_height = MODE1_GBA_HEIGHT;
 
 void virtuappu_mode1_set_frame_geometry(const PPUMemory* ppu) {
     int width = MODE1_GBA_WIDTH;
@@ -114,6 +121,21 @@ void virtuappu_mode1_set_frame_geometry(const PPUMemory* ppu) {
 
     mode1_frame_width = width;
     mode1_frame_pitch = pitch;
+
+    int height = MODE1_GBA_HEIGHT;
+    if (ppu != NULL && ppu->frame_height != 0u) {
+        height = (int)ppu->frame_height;
+    }
+    if (height < 1) {
+        height = 1;
+    } else if (height > MODE1_MAX_FRAME_HEIGHT) {
+        height = MODE1_MAX_FRAME_HEIGHT;
+    }
+    mode1_frame_height = height;
+}
+
+int virtuappu_mode1_frame_height(void) {
+    return mode1_frame_height;
 }
 
 int virtuappu_mode1_frame_width(void) {
@@ -421,6 +443,36 @@ static void virtuappu_mode1_publish_palette_luts(void) {
 }
 
 void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_buffer, uint8_t* priority_buffer) {
+    /* Tall view: BG0 is the HUD/textbox layer, laid out for 160 lines. Keep
+     * its top half at the top and move its bottom half (rupees, keys, the
+     * default textbox) to the bottom of the taller frame; nothing in between. */
+    if (bg_index == 0 && virtuappu_mode1_tall_hud_split && mode1_frame_height > MODE1_GBA_HEIGHT) {
+        const int half = MODE1_GBA_HEIGHT / 2;
+        if (line >= mode1_frame_height - half) {
+            line -= mode1_frame_height - MODE1_GBA_HEIGHT;
+        } else if (line >= half) {
+            return;
+        }
+    }
+    /* Screen-sized canvas: sample the native 240x160 picture scaled to cover
+     * the frame at its own aspect, centred, cropping the axis that overflows
+     * (rows here, columns in the stretch loop below). */
+    const bool stretch = virtuappu_mode1_bg_stretch[bg_index] &&
+                         (mode1_frame_width > MODE1_GBA_BG_CLIP_X || mode1_frame_height > MODE1_GBA_HEIGHT);
+    int stretch_num = 1, stretch_den = 1, stretch_x0 = 0;
+    if (stretch) {
+        if (mode1_frame_width * MODE1_GBA_HEIGHT >= mode1_frame_height * MODE1_GBA_BG_CLIP_X) {
+            stretch_num = MODE1_GBA_BG_CLIP_X;
+            stretch_den = mode1_frame_width;
+            line = line * stretch_num / stretch_den +
+                   (MODE1_GBA_HEIGHT - mode1_frame_height * stretch_num / stretch_den) / 2;
+        } else {
+            stretch_num = MODE1_GBA_HEIGHT;
+            stretch_den = mode1_frame_height;
+            line = line * stretch_num / stretch_den;
+            stretch_x0 = (MODE1_GBA_BG_CLIP_X - mode1_frame_width * stretch_num / stretch_den) / 2;
+        }
+    }
     uint16_t bgcnt = virtuappu_mode1_io_read16((uint16_t)(MODE1_IO_BG0CNT + bg_index * 2));
     uint8_t priority = (uint8_t)(bgcnt & 3u);
     uint32_t char_base = (uint32_t)((bgcnt >> 2u) & 3u) * 0x4000u;
@@ -455,6 +507,18 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
     if (render_max_x > frame_width)
         render_max_x = frame_width;
     const bool ws_shadow_active = (map_width_tiles < 64) && (virtuappu_mode1_ws_shadow[bg_index] != NULL);
+    /* Tall view: the whole-view shadow replaces VRAM for x >= 240 and for
+     * every pixel of lines >= 160 (see mode1.h). Offsets are 9-bit signed
+     * here so negative screen shake indexes the leading pad cell. */
+    uint16_t* const tall_shadow =
+        (map_width_tiles < 64 && map_height_tiles < 64) ? virtuappu_mode1_tall_shadow[bg_index] : NULL;
+    const bool tall_line = (tall_shadow != NULL) && (line >= MODE1_GBA_HEIGHT);
+    const int tall_scroll_x = (scroll_x >= 256) ? scroll_x - 512 : scroll_x;
+    const int tall_row = ((eff_line + ((scroll_y >= 256) ? scroll_y - 512 : scroll_y)) >> 3);
+    const bool tall_row_ok = (tall_row >= 0) && (tall_row < MODE1_TALL_SHADOW_ROWS);
+    if (tall_shadow != NULL) {
+        render_max_x = frame_width;
+    }
     const int ws_shadow_base = virtuappu_mode1_ws_shadow_base_tile[bg_index];
     uint16_t* const ws_shadow = virtuappu_mode1_ws_shadow[bg_index];
     const bool ws_hud_right_anchor =
@@ -469,7 +533,7 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
     const int ws_msg_x0 = virtuappu_mode1_ws_msg_x0;
     const int ws_msg_x1 = virtuappu_mode1_ws_msg_x1;
 
-    if (ws_hud_right_anchor || ws_msg_line) {
+    if (ws_hud_right_anchor || ws_msg_line || stretch) {
         render_max_x = frame_width;
     }
     /* N64 perf: the tilemap screen-entry read + its address math are constant
@@ -500,11 +564,22 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
         int src_x = (eff_x + scroll_x) & (map_width_tiles * 8 - 1);                                                    \
         int tile_col = src_x / 8;                                                                                      \
         int pixel_x = src_x % 8;                                                                                       \
-        int cache_use_shadow = (ws_shadow_active && x >= MODE1_GBA_BG_CLIP_X) ? 1 : 0;                                 \
-        int cache_key = (tile_col << 1) | cache_use_shadow;                                                            \
+        int use_tall = (tall_shadow != NULL && (tall_line || x >= MODE1_GBA_BG_CLIP_X)) ? 1 : 0;                     \
+        int tall_col = 0;                                                                                              \
+        if (use_tall) {                                                                                                \
+            int tall_src_x = eff_x + tall_scroll_x;                                                                    \
+            tall_col = (tall_src_x >> 3) + 1;                                                                          \
+            pixel_x = tall_src_x & 7;                                                                                  \
+        }                                                                                                              \
+        int cache_use_shadow = (!use_tall && ws_shadow_active && x >= MODE1_GBA_BG_CLIP_X) ? 1 : 0;                    \
+        int cache_key = use_tall ? (((tall_col + 64) << 2) | 2) : ((tile_col << 2) | cache_use_shadow);                \
         if (cache_key != bg_cache_key) {                                                                               \
             bg_cache_key = cache_key;                                                                                  \
-            if (cache_use_shadow) {                                                                                    \
+            if (use_tall) {                                                                                            \
+                bg_tile_entry.raw = (tall_row_ok && tall_col >= 0 && tall_col < MODE1_TALL_SHADOW_COLS)                \
+                                        ? tall_shadow[(size_t)tall_row * MODE1_TALL_SHADOW_COLS + tall_col]            \
+                                        : (uint16_t)0u;                                                                \
+            } else if (cache_use_shadow) {                                                                             \
                 int shadow_idx = (tile_col - ws_shadow_base + 32) % 32;                                                \
                 bg_tile_entry.raw = (shadow_idx < MODE1_WS_SHADOW_COLS)                                                \
                                         ? ws_shadow[(size_t)local_row * MODE1_WS_SHADOW_COLS + shadow_idx]             \
@@ -539,7 +614,8 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
         }                                                                                                              \
         if (color_index != 0u) {                                                                                       \
             size_t pal_idx = bpp8 ? (size_t)color_index : (bg_pal_bank + color_index);                                 \
-            if (!(x >= MODE1_GBA_BG_CLIP_X && (mode1_memory.bg_palette[pal_idx] & 0x7FFFu) == 0x7C1Fu)) {              \
+            if (!((x >= MODE1_GBA_BG_CLIP_X || tall_line) &&                                                           \
+                  (mode1_memory.bg_palette[pal_idx] & 0x7FFFu) == 0x7C1Fu)) {                                          \
                 line_buffer[x] = mode1_bg_abgr_lut[pal_idx];                                                           \
                 if (priority_buffer != NULL) {                                                                         \
                     priority_buffer[x] = priority;                                                                     \
@@ -548,7 +624,11 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
         }                                                                                                              \
     } while (0)
 
-    if (!ws_msg_line && !ws_hud_right_anchor) {
+    if (stretch) {
+        for (x = 0; x < render_max_x; ++x) {
+            MODE1_BG_PIXEL(x * stretch_num / stretch_den + stretch_x0);
+        }
+    } else if (!ws_msg_line && !ws_hud_right_anchor) {
         /* Fast path: no widescreen column remap, so sample_x == x. Hoists the
          * per-pixel remap dispatch (its two flags are per-line invariants) out
          * of the hot loop entirely — A53 win, zero added per-pixel branch. */
@@ -658,6 +738,11 @@ void virtuappu_mode1_render_obj_line(int line, bool obj_1d, uint32_t* line_buffe
         obj_y = mode1_oam_y(attr);
         if (obj_y >= MODE1_GBA_HEIGHT) {
             obj_y -= 256;
+        }
+        /* Tall view: attr0 holds only 8 bits of y, which cannot tell line 200
+         * from -56. The port records the full y per slot. */
+        if (mode1_frame_height > MODE1_GBA_HEIGHT && virtuappu_mode1_obj_y_full[i] != MODE1_OBJ_Y_NONE) {
+            obj_y = virtuappu_mode1_obj_y_full[i];
         }
         if (line < obj_y || line >= obj_y + bounds_height) {
             continue;
@@ -884,17 +969,22 @@ void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_CO
         evy = 16;
     }
 
+    if (virtuappu_mode1_win0_spans != NULL && line < MODE1_MAX_FRAME_HEIGHT) {
+        win0_left = virtuappu_mode1_win0_spans[line > 0 ? line - 1 : 0][0];
+        win0_right = virtuappu_mode1_win0_spans[line > 0 ? line - 1 : 0][1];
+    }
     if (win0_right > frame_width) {
         win0_right = frame_width;
     }
-    if (win0_bottom > MODE1_GBA_HEIGHT) {
-        win0_bottom = MODE1_GBA_HEIGHT;
+    /* Tall view: a window reaching the GBA bottom edge reaches the frame's. */
+    if (win0_bottom >= MODE1_GBA_HEIGHT) {
+        win0_bottom = mode1_frame_height;
     }
     if (win1_right > frame_width) {
         win1_right = frame_width;
     }
-    if (win1_bottom > MODE1_GBA_HEIGHT) {
-        win1_bottom = MODE1_GBA_HEIGHT;
+    if (win1_bottom >= MODE1_GBA_HEIGHT) {
+        win1_bottom = mode1_frame_height;
     }
 
     win0_h_wrap = win0_left > win0_right;
@@ -1429,7 +1519,7 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
 
     dispcnt = virtuappu_mode1_io_read16(MODE1_IO_DISPCNT);
     if ((dispcnt & MODE1_DISP_FORCED_BLANK) != 0u) {
-        for (line = 0; line < MODE1_GBA_HEIGHT; ++line) {
+        for (line = 0; line < mode1_frame_height; ++line) {
             memset(&virtuappu_frame_buffer[(size_t)line * (size_t)mode1_frame_pitch], 0xFF,
                    (size_t)mode1_frame_width * sizeof(uint32_t));
         }
@@ -1445,19 +1535,20 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
      *      its line's snapshot, then renders BG / OBJ / composite normally
      *      via the existing single-line functions, which now read IO regs
      *      through the override. */
-    static uint8_t io_snapshots[MODE1_GBA_HEIGHT][MODE1_IO_MEM_SIZE];
-    uint16_t per_line_dispcnt[MODE1_GBA_HEIGHT];
+    static uint8_t io_snapshots[MODE1_MAX_FRAME_HEIGHT][MODE1_IO_MEM_SIZE];
+    uint16_t per_line_dispcnt[MODE1_MAX_FRAME_HEIGHT];
+    const int frame_height = mode1_frame_height;
 
     /* Affine BG2 carries an internal reference point across scanlines (#132).
      * Gather per-line, post-callback inputs during the sequential pass and
      * precompute the per-line reference so the parallel pass stays independent. */
     const bool do_affine_bg2 = affine && ((dispcnt & MODE1_DISP_BG2_ON) != 0u);
-    int32_t aff_ref_x[MODE1_GBA_HEIGHT];
-    int32_t aff_ref_y[MODE1_GBA_HEIGHT];
-    int32_t aff_line_ref_x[MODE1_GBA_HEIGHT];
-    int32_t aff_line_ref_y[MODE1_GBA_HEIGHT];
-    int16_t aff_pb[MODE1_GBA_HEIGHT];
-    int16_t aff_pd[MODE1_GBA_HEIGHT];
+    int32_t aff_ref_x[MODE1_MAX_FRAME_HEIGHT];
+    int32_t aff_ref_y[MODE1_MAX_FRAME_HEIGHT];
+    int32_t aff_line_ref_x[MODE1_MAX_FRAME_HEIGHT];
+    int32_t aff_line_ref_y[MODE1_MAX_FRAME_HEIGHT];
+    int16_t aff_pb[MODE1_MAX_FRAME_HEIGHT];
+    int16_t aff_pd[MODE1_MAX_FRAME_HEIGHT];
     int32_t aff_init_x = 0;
     int32_t aff_init_y = 0;
     if (do_affine_bg2) {
@@ -1470,8 +1561,11 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
      * critical path and point every thread's override straight at io_mem in the
      * parallel loop below. Byte-exact: each snapshot equalled io_mem anyway. */
     const bool per_line_io = (virtuappu_mode1_pre_line_callback != NULL);
-    for (line = 0; line < MODE1_GBA_HEIGHT; ++line) {
+    for (line = 0; line < frame_height; ++line) {
         if (per_line_io) {
+            /* Tall view: the callback also runs for lines past 160. It
+             * knows how many lines each HBlank table holds and leaves the
+             * registers alone past that (port_hdma_step_line). */
             virtuappu_mode1_pre_line_callback(line);
             memcpy(io_snapshots[line], mode1_memory.io_mem, MODE1_IO_MEM_SIZE);
             per_line_dispcnt[line] =
@@ -1494,7 +1588,7 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
         }
     }
     if (do_affine_bg2) {
-        virtuappu_mode1_affine_precompute(MODE1_GBA_HEIGHT, aff_init_x, aff_init_y, aff_line_ref_x, aff_line_ref_y,
+        virtuappu_mode1_affine_precompute(frame_height, aff_init_x, aff_init_y, aff_line_ref_x, aff_line_ref_y,
                                           aff_pb, aff_pd, virtuappu_mode1_bg2x_hdma_strobe,
                                           virtuappu_mode1_bg2y_hdma_strobe, aff_ref_x, aff_ref_y);
     }
@@ -1506,7 +1600,7 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
     virtuappu_mode1_publish_palette_luts();
 
 #pragma omp parallel for schedule(static)
-    for (line = 0; line < MODE1_GBA_HEIGHT; ++line) {
+    for (line = 0; line < frame_height; ++line) {
         /* Affine (mode 2) renders every scanline against the frame-start DISPCNT
          * (GBA latches BGMODE once per frame; matches the former mode2.c). The
          * tiled path honours per-line DISPCNT for HBlank-DMA changes. */

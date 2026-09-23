@@ -33,9 +33,15 @@ typedef struct {
     uint8_t unit;   // 2 or 4 bytes
     uint8_t src_fixed;
     uint8_t dest_mode; // HdmaDestMode
+    int lines;         // table entries + 1: lines that take a transfer
 } HdmaChannel;
 
 static HdmaChannel s_channels[HDMA_CHANNELS];
+static int s_next_table_lines = 160;
+
+void port_hdma_set_table_lines(int lines) {
+    s_next_table_lines = lines;
+}
 
 void port_hdma_register(int channel, const void* src, void* dest, uint16_t cnt_h, uint16_t count) {
     HdmaChannel* c;
@@ -49,6 +55,7 @@ void port_hdma_register(int channel, const void* src, void* dest, uint16_t cnt_h
     c->src_orig = c->src = (const uint8_t*)src;
     c->dest_orig = c->dest = (uint8_t*)dest;
     c->count = count ? count : 1;
+    c->lines = s_next_table_lines;
     c->unit = (cnt_h & DMA_CNT_32BIT) ? 4 : 2;
     c->src_fixed = (cnt_h & DMA_CNT_SRC_FIXED) ? 1 : 0;
     dm = cnt_h & DMA_CNT_DEST_MASK;
@@ -114,6 +121,7 @@ int port_hdma_dest_overlaps(const void* lo, const void* hi) {
  * again?" loop is that seed. This callback runs before line N is drawn, so
  * line 0 performs the seed (transfer entry 0, then rewind) and lines 1..159
  * perform transfers 0..158; transfer 159 lands in VBlank and is invisible.
+ * A tall view runs lines past 160 only through tables that cover them.
  */
 void port_hdma_step_line(int line) {
     int ch;
@@ -123,7 +131,7 @@ void port_hdma_step_line(int line) {
         uint8_t* d;
         uint16_t i;
 
-        if (!c->active) {
+        if (!c->active || line >= c->lines) {
             continue;
         }
         d = c->dest;
@@ -145,6 +153,57 @@ void port_hdma_step_line(int line) {
             c->dest = c->dest_orig;
         }
     }
+}
+
+typedef struct {
+    const void* table;
+    int pending; /* filled since the last SetVBlankDMA of this table */
+    int armed;
+    int16_t spans[PORT_HDMA_SPAN_LINES][2];
+} Win0SpanSlot;
+
+/* Two slots: TMC double-buffers its window tables (gUnk_03003DE4[0]). */
+static Win0SpanSlot s_win0_spans[2];
+
+int16_t (*port_hdma_win0_spans_fill(const void* table))[2] {
+    Win0SpanSlot* slot = &s_win0_spans[0];
+    const HdmaChannel* c = &s_channels[0];
+
+    if (s_win0_spans[1].table == table ||
+        (s_win0_spans[0].table != table && c->active && s_win0_spans[0].table == c->src_orig)) {
+        slot = &s_win0_spans[1];
+    }
+    slot->table = table;
+    slot->pending = 1;
+    memset(slot->spans, 0, sizeof(slot->spans));
+    return slot->spans;
+}
+
+void port_hdma_win0_spans_commit(const void* src, int dest_is_win0h) {
+    int i;
+
+    for (i = 0; i < 2; ++i) {
+        Win0SpanSlot* slot = &s_win0_spans[i];
+        if (slot->table == src) {
+            slot->armed = slot->pending && dest_is_win0h;
+            slot->pending = 0;
+        }
+    }
+}
+
+const int16_t (*port_hdma_win0_spans(void))[2] {
+    const HdmaChannel* c = &s_channels[0];
+    int i;
+
+    if (!c->active) {
+        return NULL;
+    }
+    for (i = 0; i < 2; ++i) {
+        if (s_win0_spans[i].armed && s_win0_spans[i].table == c->src_orig) {
+            return (const int16_t(*)[2])s_win0_spans[i].spans;
+        }
+    }
+    return NULL;
 }
 
 void port_hdma_vblank_reset(void) {

@@ -18,6 +18,15 @@
 #include <stdio.h>
 #endif
 
+#ifdef PC_PORT
+#include "port_hdma.h"
+#include "port_widescreen.h"
+/* The tall view draws more than 160 lines; fill the table for all of them. */
+#define HBLANK_LINES Port_Widescreen_EffectiveViewHeight()
+#else
+#define HBLANK_LINES 0xa0
+#endif
+
 extern void DisableVBlankDMA(void);
 
 void (*const LightRayManager_Actions[])(LightRayManager*);
@@ -213,13 +222,16 @@ void sub_0805732C(u32 param_1, u32 param_2) {
     u32 index;
     u16* ptr = &gUnk_02017AA0[gUnk_03003DE4[0] * 0x500];
 
-    for (index = 0; index < 0xa0; ptr++, index++) {
+    for (index = 0; index < HBLANK_LINES; ptr++, index++) {
         *ptr = gSineTable[(param_2 + index) & 0xff] * param_1 / 0x100 + gScreen.bg3.xOffset;
     }
 
     SetVBlankDMA(&gUnk_02017AA0[gUnk_03003DE4[0] * 0x500], (u16*)REG_ADDR_BG3HOFS,
                  ((DMA_ENABLE | DMA_START_HBLANK | DMA_16BIT | DMA_REPEAT | DMA_SRC_INC | DMA_DEST_RELOAD) << 16) +
                      0x1);
+#ifdef PC_PORT
+    port_hdma_set_table_lines(HBLANK_LINES);
+#endif
 }
 
 void nullsub_494() {

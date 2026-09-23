@@ -2174,12 +2174,18 @@ void WaitForCameraTouchRoomBorder(Entity* entity, ScriptExecutionContext* contex
         if (left > gRoomControls.origin_x + gRoomControls.width - DISPLAY_WIDTH)
             left = gRoomControls.origin_x + gRoomControls.width - DISPLAY_WIDTH;
 #endif
+#if MODE1_GBA_WIDTH > 240
+        /* Same equality wait on y: the tall view's rest y (CameraRestY). */
+        extern int Port_Widescreen_CameraRestY(int target_y);
+        bottom = Port_Widescreen_CameraRestY(gRoomControls.camera_target->y.HALF.HI);
+#else
         bottom = gRoomControls.camera_target->y.HALF.HI - DISPLAY_HEIGHT / 2;
 
         if (bottom < gRoomControls.origin_y)
             bottom = gRoomControls.origin_y;
         if (bottom > gRoomControls.origin_y + gRoomControls.height - DISPLAY_HEIGHT)
             bottom = gRoomControls.origin_y + gRoomControls.height - DISPLAY_HEIGHT;
+#endif
 
         if (left == gRoomControls.scroll_x && bottom == gRoomControls.scroll_y)
             gActiveScriptInfo.flags |= 1;

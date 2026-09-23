@@ -172,6 +172,19 @@ extern "C" int Port_PPU_VisibleFrameWidth(void) {
     return 240;
 }
 
+/* Tall view (zoom-out, TMC_WS_VIEW_HEIGHT): the gameplay frame height, under
+ * the same gate as the wide width; 160 everywhere else. Call after
+ * Port_PPU_VisibleFrameWidth so the window size is already published. */
+extern "C" int Port_PPU_VisibleFrameHeight(void) {
+    if (MODE1_GBA_WIDTH == 240) {
+        return MODE1_GBA_HEIGHT;
+    }
+    if (gMain[2] == 2 /* TASK_GAME */ && Port_Widescreen_IsActive() && Port_Widescreen_ShadowsLive()) {
+        return Port_Widescreen_EffectiveViewHeight();
+    }
+    return MODE1_GBA_HEIGHT;
+}
+
 /* xBRZ scratch buffers are sized to the frame we are actually presenting:
  * 240x160 when the WIP widescreen option is off/falling back, or
  * MODE1_GBA_WIDTHx160 while true widescreen is active. */
@@ -241,7 +254,7 @@ static const uint32_t* Port_PPU_SelectPresentFrame(int* outW, int* outH, int* ou
     if (outW)
         *outW = visibleW;
     if (outH)
-        *outH = MODE1_GBA_HEIGHT;
+        *outH = virtuappu_registers.frame_height != 0 ? (int)virtuappu_registers.frame_height : MODE1_GBA_HEIGHT;
     if (outPitchBytes) {
         *outPitchBytes = MODE1_GBA_WIDTH * static_cast<int>(sizeof(uint32_t));
     }
@@ -1003,6 +1016,7 @@ bind_virtuappu_memory: {
 }
 
     virtuappu_registers.frame_width = Port_PPU_VisibleFrameWidth();
+    virtuappu_registers.frame_height = (uint16_t)Port_PPU_VisibleFrameHeight();
     virtuappu_registers.frame_pitch = MODE1_GBA_WIDTH;
     virtuappu_registers.mode = 1;
 
@@ -1222,6 +1236,17 @@ static bool Port_PPU_TryGpuRaster(void) {
     if (virtuappu_mode1_obj_clip_enable) {
         return false; /* swamp-sink obj-clip not in the shader */
     }
+    if (virtuappu_registers.frame_height > MODE1_GBA_HEIGHT) {
+        return false; /* tall view (tall shadow, full OAM y) is CPU-only */
+    }
+    for (int i = 0; i < MODE1_GBA_BG_COUNT; ++i) {
+        if (virtuappu_mode1_bg_stretch[i]) {
+            return false; /* stretched screen-sized canvas is CPU-only */
+        }
+    }
+    if (virtuappu_mode1_win0_spans != nullptr) {
+        return false; /* frame-resolution WIN0 spans are CPU-only */
+    }
     static int perfcap = -1;
     if (perfcap < 0) {
         const char* e = getenv("TMC_PERFCAP");
@@ -1390,6 +1415,7 @@ extern "C" void Port_PPU_PresentFrame(void) {
 #endif
 
     virtuappu_registers.frame_width = Port_PPU_VisibleFrameWidth();
+    virtuappu_registers.frame_height = (uint16_t)Port_PPU_VisibleFrameHeight();
     virtuappu_registers.frame_pitch = MODE1_GBA_WIDTH;
 
     dispcnt = (uint16_t)(gIoMem[0x00] | (gIoMem[0x01] << 8));
@@ -1421,6 +1447,7 @@ extern "C" void Port_PPU_PresentFrame(void) {
      * channel is active. Affine BG rendering treats BG2X/BG2Y differently
      * when HDMA has already supplied per-line reference points. */
     virtuappu_mode1_pre_line_callback = port_hdma_has_active_channels() ? port_hdma_step_line : nullptr;
+    virtuappu_mode1_win0_spans = port_hdma_win0_spans();
 
     /* Affine reference write strobes: a per-line HDMA write to BG2X/BG2Y
      * must reload the internal latch even when it writes the SAME value
@@ -1541,7 +1568,9 @@ extern "C" void Port_PPU_PresentFrame(void) {
      * raw game data. No-ops when disabled. Operates on the native render extent
      * (stride MODE1_GBA_WIDTH x MODE1_GBA_HEIGHT); present-side upscale/xBRZ run
      * afterwards on the transformed pixels. */
-    Port_PPU_ApplyDisplayPostProcess(MODE1_GBA_WIDTH * MODE1_GBA_HEIGHT);
+    Port_PPU_ApplyDisplayPostProcess(MODE1_GBA_WIDTH * (virtuappu_registers.frame_height != 0
+                                                            ? (int)virtuappu_registers.frame_height
+                                                            : MODE1_GBA_HEIGHT));
 
     int presentW = 0;
     int presentH = 0;

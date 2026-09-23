@@ -78,6 +78,38 @@ enum {
 extern uint16_t* virtuappu_mode1_ws_shadow[MODE1_GBA_BG_COUNT];
 extern int virtuappu_mode1_ws_shadow_base_tile[MODE1_GBA_BG_COUNT];
 
+/* Tall view (zoom-out): the frame can be taller than the GBA's 160 lines.
+ * The engine streams only ~23 tile rows into each 32-row screenblock, so
+ * lines past 160 have no valid VRAM behind them. A tall shadow covers the
+ * whole view from gMapData*Special instead: cell [r][c] is world tile
+ * (2*row16 - 1 + r, 2*col16 - 1 + c), i.e. VRAM row r and VRAM col c - 1,
+ * indexed by the UNWRAPPED (line + BGVOFS) / 8 and (x + BGHOFS) / 8 + 1.
+ * The PPU reads it for x >= 240 or line >= 160 on BGs that have one; NULL
+ * keeps the existing widescreen path. Sprites get their full screen y from
+ * virtuappu_mode1_obj_y_full (MODE1_OBJ_Y_NONE = use the 8-bit attr0 y). */
+#ifdef TMC_N64
+#define MODE1_MAX_FRAME_HEIGHT 160
+#else
+#define MODE1_MAX_FRAME_HEIGHT 240
+#endif
+#define MODE1_TALL_SHADOW_ROWS ((MODE1_MAX_FRAME_HEIGHT + 32) / 8 + 2)
+#define MODE1_TALL_SHADOW_COLS ((MODE1_GBA_WIDTH + 32) / 8 + 2)
+#define MODE1_OBJ_Y_NONE (-32768)
+extern uint16_t* virtuappu_mode1_tall_shadow[MODE1_GBA_BG_COUNT];
+extern int16_t virtuappu_mode1_obj_y_full[MODE1_GBA_OAM_COUNT];
+/* Nonzero while the tall view shows gameplay: BG0 (HUD) lines 80..159 are
+ * drawn at the bottom of the frame instead (see render_text_bg_line). */
+extern int virtuappu_mode1_tall_hud_split;
+/* Nonzero for a BG that is a screen-sized 240x160 canvas rather than a map
+ * or a repeating texture (e.g. the Minish Woods sunshine): on a wider or
+ * taller frame it is scaled to fill the frame instead of wrapping. */
+extern int virtuappu_mode1_bg_stretch[MODE1_GBA_BG_COUNT];
+/* Non-NULL: per-line WIN0 [left, right] at frame resolution, used instead of
+ * the HBlank-DMA'd WIN0H (8-bit x, 160 lines) for a wider or taller frame.
+ * Indexed like the HBlank table: line N shows entry N-1, line 0 entry 0. */
+extern const int16_t (*virtuappu_mode1_win0_spans)[2];
+int virtuappu_mode1_frame_height(void);
+
 /* Runtime WIP widescreen HUD anchor. BG0 stays 32 tiles wide, but gameplay
  * HUD uses both left-anchored widgets (hearts/charge) and right-anchored
  * widgets (rupees/keys). When enabled by the port, render BG0 cols
