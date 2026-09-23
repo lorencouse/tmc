@@ -1621,19 +1621,7 @@ extern "C" void Port_PPU_PresentFrame(void) {
         Port_TouchControls_NotifyRenderSize(outW, outH);
         int sx, sy, sw_stage, sh_stage;
         int x, y, w, h;
-        /* Preview split: the settings shell has docked to part of the screen
-         * and left this area for the picture, so fit the frame in there
-         * instead of the whole output. Everything below works in output
-         * coordinates, so shift the finished rects by the inset's origin. */
-        int inX = 0, inY = 0, inW = outW, inH = outH;
-        const bool inset = Port_ImGui_PreviewViewport(outW, outH, &inX, &inY, &inW, &inH);
-        Port_PPU_ComputeViewportRects(inW, inH, presentW, presentH, &sx, &sy, &sw_stage, &sh_stage, &x, &y, &w, &h);
-        if (inset) {
-            sx += inX;
-            sy += inY;
-            x += inX;
-            y += inY;
-        }
+        Port_PPU_ComputeViewportRects(outW, outH, presentW, presentH, &sx, &sy, &sw_stage, &sh_stage, &x, &y, &w, &h);
         SDL_FRect stage = { (float)sx, (float)sy, (float)sw_stage, (float)sh_stage };
         SDL_FRect dst = { (float)x, (float)y, (float)w, (float)h };
 

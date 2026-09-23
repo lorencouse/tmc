@@ -25,13 +25,6 @@ bool Port_ImGui_ConsoleMode(void);
  * Only call while the menu is open. */
 bool Port_ImGui_HandleGameInputEvent(const SDL_Event* event);
 
-/* While the console shell is showing a group whose settings change what the
- * screen looks like, it docks to part of the screen and the game frame is
- * fitted into the rest so a change can be judged as it is made. Fills in
- * the area the frame must fit inside, in the caller's own units, and
- * returns false when the frame should have the whole output as usual. */
-bool Port_ImGui_PreviewViewport(int outW, int outH, int* x, int* y, int* w, int* h);
-
 bool Port_ImGui_IsEnabled(void);
 bool Port_ImGui_RibbonEnabled(void);
 void Port_ImGui_SetRibbonEnabled(bool enabled);

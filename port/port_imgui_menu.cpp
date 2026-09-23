@@ -109,11 +109,16 @@ bool Port_DebugMenu_HandleKey(int sdlKey);              /* classic page-stack in
 
 static bool sImGuiInited = false;
 static bool sRibbonEnabled = true; /* Office-style ribbon at top */
-/* Console-shell help line: the text for whichever row the D-pad cursor is
- * sitting on. Fed by RandoUi_HelpTooltip — its (?) tooltip is hover-only,
- * and a handheld has no pointer to hover with — and drained by the console
- * footer each frame. */
+/* Console-shell help line: the text of the (?) the player has opened. Fed
+ * by RandoUi_HelpTooltip — its (?) tooltip is hover-only, and a handheld has
+ * no pointer to hover with — and drained by the console footer each frame. */
 static const char* sConsoleHelp = nullptr;
+/* The (?) whose help is open (0 = none), one to put the cursor back on next
+ * frame, and the frame a B press was spent closing help, so the same press
+ * doesn't also back out of the group. */
+static ImGuiID sConsoleHelpOpenId = 0;
+static ImGuiID sConsoleHelpRefocusId = 0;
+static int sConsoleHelpCancelFrame = -1;
 static SDL_Window* sWindow = nullptr;
 
 /* See the small-display pass in Port_ImGui_Init: one scale factor for
@@ -1622,7 +1627,7 @@ static void DrawRibbonSavesTab(void) {
 /* ------------------------------------------------------------------ */
 /* The Saves tab above is a desktop table: 23 rows of radio buttons and
  * paired Save/Load buttons, three D-pad levels deep inside the settings
- * shell and sharing the screen with the live preview split. Fine for
+ * shell and sharing the screen with the game behind it. Fine for
  * housekeeping, hopeless for the thing a player actually does mid-play --
  * "show me my states and put me back in one of them, now".
  *
@@ -2864,16 +2869,38 @@ static void RandoUi_SettingDefaultValue(const RandoLogicSetting* s, char* out, s
 }
 
 static void RandoUi_HelpTooltip(const char* text) {
-    /* Console shell: there is no pointer to hover the (?) with, so the help
-     * goes to the footer whenever nav focus is on the row it annotates. The
-     * "row" is the widget drawn immediately before this call — on a stepper
-     * that is the '>' button, so help appears once the cursor reaches the
-     * right-hand end of the row rather than on first landing. */
+    /* Console shell: there is no pointer to hover the (?) with, so it is a
+     * D-pad stop of its own at the end of the row. A opens its help in the
+     * footer; B, A again, or moving off it closes it. Help never appears
+     * just because the cursor landed on a row -- it pushed the button
+     * legend around on every step. */
     if (Port_ImGui_ConsoleMode()) {
-        if (ImGui::IsItemFocused() || ImGui::IsItemHovered())
-            sConsoleHelp = text;
         ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
+        ImGui::PushID(text);
+        const ImGuiID id = ImGui::GetID("##help");
+        if (sConsoleHelpRefocusId == id) {
+            ImGui::SetKeyboardFocusHere();
+            sConsoleHelpRefocusId = 0;
+        }
+        const bool pressed = ImGui::SmallButton("(?)");
+        if (sConsoleHelpOpenId == id) {
+            const bool back =
+                ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+            if (back) {
+                /* ImGui's own nav cancel drops the cursor; put it back. */
+                sConsoleHelpOpenId = 0;
+                sConsoleHelpRefocusId = id;
+                sConsoleHelpCancelFrame = ImGui::GetFrameCount();
+            } else if (pressed || !ImGui::IsItemFocused()) {
+                sConsoleHelpOpenId = 0;
+            } else {
+                sConsoleHelp = text;
+            }
+        } else if (pressed) {
+            sConsoleHelpOpenId = id;
+            sConsoleHelp = text;
+        }
+        ImGui::PopID();
         return;
     }
     ImGui::SameLine();
@@ -4881,103 +4908,29 @@ static int ConsoleCatStep(int from, int dir) {
 }
 
 /* ------------------------------------------------------------------ */
-/*   Preview split                                                     */
+/*   Bottom-half overlay                                               */
 /* ------------------------------------------------------------------ */
-/* Aspect mode, window scale, upscaler, filter, colour correction, LCD
- * persistence and the background fill are all judged by eye, and a shell
- * that covers the whole screen hides the one thing the player needs to
- * see while changing them. So the shell never takes the whole screen: it
- * keeps the larger share and the picture is fitted into the rest, live,
- * for the whole time the menu is open. One layout for every group and for
- * the group list -- stepping from Display to Audio with L1/R1 must not
- * make the panel jump between half the screen and all of it.
+/* The shell sits over the bottom half of the screen and the game frame is
+ * left exactly as it is underneath, so the top half of the real picture
+ * stays in view. Aspect, scale, filter, colour and fill are judged by eye,
+ * and an unscaled half of the real frame shows them better than a shrunk
+ * copy squeezed in beside the panel. One layout for every group and for the
+ * group list -- stepping from Display to Audio with L1/R1 must not make the
+ * panel jump between half the screen and all of it.
  *
- * The picture is scaled down to fit its share, so this shows the *shape*
- * of a change (letterboxing, aspect, fill, colour, persistence) rather
- * than its exact per-pixel look; closing the menu goes back to the real
- * thing. Shape is what these settings are chosen by.
- *
- * Fractions, not pixels: the PPU asks in swapchain texels and the shell in
- * ImGui points, and on a HiDPI window those differ.
- *
- * Split on the aspect of the output. The GBA frame is 3:2, so a wide
- * screen loses less of it side-by-side than stacked; anything squarer
- * stacks. Either way the panel keeps the larger share -- it carries a
- * header, a scrolling body and the two-line footer legend. */
-struct ConsolePreview {
-    float picX, picY, picW, picH; /* the game frame's share */
-    float panX, panY, panW, panH; /* the settings panel's share */
-};
-/* The picture's share of the split, and the most it may grow to when the
- * first choice leaves it smaller than one GBA frame. */
-static const float kPreviewPicShare = 0.46f;
-static const float kPreviewPicShareMax = 0.5f;
+ * Screens too short to give the panel a usable half (under about 320 px)
+ * keep the full-screen shell. */
+static const float kOverlayPanelShare = 0.5f;
 
-/* A share is usable only if the picture still gets a whole GBA frame to
- * scale into; below that there is nothing to judge and the panel should
- * keep the screen. */
-static bool ConsolePreviewFits(bool sideBySide, float share, float outW, float outH) {
-    const float picW = sideBySide ? outW * share : outW;
-    const float picH = sideBySide ? outH : outH * share;
-    return picW >= (float)MODE1_GBA_WIDTH && picH >= 160.0f;
-}
-
-static bool ConsolePreviewSplit(float outW, float outH, ConsolePreview* out) {
-    if (!sImGuiInited || !out || outW <= 0.0f || outH <= 0.0f)
+static bool ConsoleOverlayRect(float outW, float outH, ImVec2* pos, ImVec2* size) {
+    if (!sImGuiInited || outW <= 0.0f || outH <= 0.0f)
         return false;
     if (!Port_DebugMenu_IsOpen() || !Port_ImGui_ConsoleMode())
         return false;
-
-    /* Preferred orientation first, then the other one, then the same two at
-     * the wider share -- a 480x320 panel only clears the floor at 0.5 and
-     * side by side. Nothing fits on a screen smaller than about two GBA
-     * frames, and there the shell keeps the whole screen as before. */
-    const bool preferSide = (outW >= outH * 1.45f);
-    const struct {
-        bool side;
-        float share;
-    } candidates[] = {
-        { preferSide, kPreviewPicShare },
-        { !preferSide, kPreviewPicShare },
-        { preferSide, kPreviewPicShareMax },
-        { !preferSide, kPreviewPicShareMax },
-    };
-    for (const auto& c : candidates) {
-        if (!ConsolePreviewFits(c.side, c.share, outW, outH))
-            continue;
-        out->picX = 0.0f;
-        out->picY = 0.0f;
-        out->picW = c.side ? c.share : 1.0f;
-        out->picH = c.side ? 1.0f : c.share;
-        out->panX = c.side ? c.share : 0.0f;
-        out->panY = c.side ? 0.0f : c.share;
-        out->panW = c.side ? 1.0f - c.share : 1.0f;
-        out->panH = c.side ? 1.0f : 1.0f - c.share;
-        return true;
-    }
-    return false;
-}
-
-/* The area the game frame must fit inside this frame, in the caller's own
- * units. False means "use the whole output", the normal case. */
-extern "C" bool Port_ImGui_PreviewViewport(int outW, int outH, int* x, int* y, int* w, int* h) {
-    ConsolePreview p;
-    if (outW <= 0 || outH <= 0 || !x || !y || !w || !h)
+    if (outH * kOverlayPanelShare < 160.0f)
         return false;
-    /* The picker is judged on its own previews, not on the live frame, and
-     * it wants every pixel for them. */
-    if (Port_DebugMenu_StatePickerOpen())
-        return false;
-    if (!ConsolePreviewSplit((float)outW, (float)outH, &p))
-        return false;
-    *x = (int)(p.picX * (float)outW);
-    *y = (int)(p.picY * (float)outH);
-    *w = (int)(p.picW * (float)outW);
-    *h = (int)(p.picH * (float)outH);
-    /* One GBA frame is the floor; a sliver of picture is worse than none.
-     * (port_widescreen.h carries MODE1_GBA_WIDTH but not the height.) */
-    if (*w < MODE1_GBA_WIDTH || *h < 160)
-        return false;
+    *pos = ImVec2(0.0f, outH * (1.0f - kOverlayPanelShare));
+    *size = ImVec2(outW, outH * kOverlayPanelShare);
     return true;
 }
 
@@ -4985,6 +4938,8 @@ extern "C" bool Port_ImGui_PreviewViewport(int outW, int outH, int* x, int* y, i
  * same press to closing a popup or cancelling an active widget, and acting
  * on it here as well would pop the page out from under that. */
 static bool ConsoleCancelPressed(void) {
+    if (sConsoleHelpCancelFrame == ImGui::GetFrameCount())
+        return false;
     if (ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
         return false;
     return ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
@@ -5069,8 +5024,7 @@ static void DrawConsoleCatList(void) {
         if (!adv && kConsoleCats[sConsoleCat].advanced)
             sConsoleCat = ConsoleCatStep(sConsoleCat, +1);
     }
-    if (ImGui::IsItemFocused() || ImGui::IsItemHovered())
-        sConsoleHelp = "Items, warps, flags, memory and practice tools. Debug aids, not game settings.";
+    RandoUi_HelpTooltip("Items, warps, flags, memory and practice tools. Debug aids, not game settings.");
     if (ImGui::Button("Close Menu", ImVec2(-FLT_MIN, 0)))
         Port_DebugMenu_Toggle();
 }
@@ -5087,18 +5041,13 @@ static void DrawConsoleMenu(void) {
     if (!ConsoleCatVisible(sConsoleCat))
         sConsoleCat = ConsoleCatStep(sConsoleCat, +1);
 
-    /* Near-opaque and pinned to its share of the split: on a 3.5" panel a
-     * floating panel over live gameplay is unreadable, and there is no
-     * second window to reach. The PPU fits the game frame into the rest.
-     * Screens too small to give the picture a whole GBA frame get the old
-     * full-screen shell -- a sliver of picture is worse than none. */
-    ConsolePreview split;
-    const bool previewing = ConsolePreviewSplit(io.DisplaySize.x, io.DisplaySize.y, &split);
-    if (previewing) {
-        ImGui::SetNextWindowPos(ImVec2(split.panX * io.DisplaySize.x, split.panY * io.DisplaySize.y),
-                                ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(split.panW * io.DisplaySize.x, split.panH * io.DisplaySize.y),
-                                 ImGuiCond_Always);
+    /* Near-opaque and pinned to the bottom half: on a 3.5" panel a floating
+     * panel over live gameplay is unreadable, and there is no second window
+     * to reach. The top half of the game frame stays visible above it. */
+    ImVec2 panelPos, panelSize;
+    if (ConsoleOverlayRect(io.DisplaySize.x, io.DisplaySize.y, &panelPos, &panelSize)) {
+        ImGui::SetNextWindowPos(panelPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(panelSize, ImGuiCond_Always);
     } else {
         ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
         ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
@@ -5851,6 +5800,8 @@ extern "C" bool Port_ImGui_BuildFrame(void) {
         sConsoleInCat = false;
         sConsoleRestoreCursor = false;
         sConsoleHelp = nullptr;
+        sConsoleHelpOpenId = 0;
+        sConsoleHelpRefocusId = 0;
         StatePickerReset();
     }
     if (!sPrevMenuOpen && menuOpen) {
