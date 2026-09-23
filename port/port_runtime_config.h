@@ -284,6 +284,22 @@ bool Port_Config_GetMenuHintSeen(void);
 void Port_Config_SetMenuHintSeen(bool seen);
 bool Port_Config_GetHoldToAdvanceText(void);
 void Port_Config_SetHoldToAdvanceText(bool on);
+/* Quality-of-life extras (all default off / vanilla). instant_text draws each
+ * text page at once whatever the save's msg_speed; tunic_color / heart_color
+ * use the randomizer cosmetic palettes in normal play (0 = vanilla, 1..5 as
+ * the rando tunic/heart lists, no "Random"); low_health_beep is a
+ * PORT_LOW_HEALTH_BEEP_* cadence. Out-of-range values clamp. */
+#define PORT_LOW_HEALTH_BEEP_NORMAL 0
+#define PORT_LOW_HEALTH_BEEP_SLOWER 1
+#define PORT_LOW_HEALTH_BEEP_OFF 2
+bool Port_Config_GetInstantText(void);
+void Port_Config_SetInstantText(bool on);
+int Port_Config_GetTunicColor(void);
+void Port_Config_SetTunicColor(int color);
+int Port_Config_GetHeartColor(void);
+void Port_Config_SetHeartColor(int color);
+int Port_Config_GetLowHealthBeep(void);
+void Port_Config_SetLowHealthBeep(int mode);
 bool Port_Config_GetRollAttackMacroEnabled(void);
 bool Port_Config_GetSelectStateChords(void);
 void Port_Config_SetRollAttackMacroEnabled(bool on);

@@ -4215,8 +4215,8 @@ static void DrawRibbonAccessibilityTab(void) {
 
 static void DrawRibbonRebornTab(void) {
     ImGui::TextWrapped("Quality-of-life features ported from Minish Cap Reborn "
-                       "(GPL-3.0); see THIRD-PARTY-LICENSES.md. Toggles persist "
-                       "until tmc_pc closes.");
+                       "(GPL-3.0); see THIRD-PARTY-LICENSES.md. Toggles are saved "
+                       "to config.json.");
     ImGui::Separator();
     for (int i = 0; i < REBORN_FEAT_COUNT; ++i) {
         /* Slot 8 (rupee-like overhaul) was removed; its enum slot is kept so
@@ -4265,6 +4265,43 @@ static void DrawRibbonRebornTab(void) {
             ImGui::EndTooltip();
         }
         ImGui::Unindent(20.0f);
+    }
+
+    /* Port extras (not Reborn ports): plain config keys, all default vanilla.
+     * The colour lists match the randomizer's, minus its seed-driven Random. */
+    ImGui::Separator();
+    bool instant = Port_Config_GetInstantText();
+    if (ImGui::Checkbox("Instant text", &instant))
+        Port_Config_SetInstantText(instant);
+    RandoUi_HelpTooltip("Each page of text appears at once instead of typing out, whatever the "
+                        "save's Message Speed. Line breaks and scripted pauses still take a "
+                        "moment. (The randomizer's Fast Text only sets Message Speed to Fast.)");
+    if (ImGui::BeginTable("##qol_extras_table", 2, ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        StepperRow("Tunic color", "tunic",
+                   [](char*, size_t) -> const char* {
+                       static const char* k[] = { "Green (vanilla)", "Red", "Blue", "Purple", "Orange", "Grey" };
+                       return k[Port_Config_GetTunicColor()];
+                   },
+                   [](int d) { Port_Config_SetTunicColor((Port_Config_GetTunicColor() + d + 6) % 6); });
+        StepperRow("Heart color", "heart",
+                   [](char*, size_t) -> const char* {
+                       static const char* k[] = { "Red (vanilla)", "Blue", "Green", "Yellow", "Purple", "Rainbow" };
+                       return k[Port_Config_GetHeartColor()];
+                   },
+                   [](int d) { Port_Config_SetHeartColor((Port_Config_GetHeartColor() + d + 6) % 6); });
+        RandoUi_HelpTooltip("Recolours Link's tunic and the HUD hearts. On a randomizer seed, the "
+                            "seed's own cosmetic pick wins unless it is the vanilla colour.");
+        StepperRow("Low-health beep", "lowhp",
+                   [](char*, size_t) -> const char* {
+                       static const char* k[] = { "normal", "slower", "off" };
+                       return k[Port_Config_GetLowHealthBeep()];
+                   },
+                   [](int d) { Port_Config_SetLowHealthBeep((Port_Config_GetLowHealthBeep() + d + 3) % 3); });
+        RandoUi_HelpTooltip("The warning beep below 1/4 hearts: normal every 1.5 s, slower every "
+                            "4.5 s, or off. The hearts still flash.");
+        ImGui::EndTable();
     }
 }
 

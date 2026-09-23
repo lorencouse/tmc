@@ -22,6 +22,10 @@ extern bool Port_Config_GetHoldToAdvanceText(void);
 #define MESSAGE_PRESS_ANY_ADVANCE_KEYS                 \
     (((gInput.newKeys & MESSAGE_ADVANCE_KEYS) != 0) || \
      (Port_Config_GetHoldToAdvanceText() && (gInput.heldKeys & MESSAGE_ADVANCE_KEYS) != 0))
+/* Port QoL (default off): "instant text" — TextDispUpdate draws each page in
+ * one go whatever the save's msg_speed; line breaks and scripted pauses still
+ * take their few frames. */
+extern bool Port_Config_GetInstantText(void);
 #else
 #define MESSAGE_PRESS_ANY_ADVANCE_KEYS ((gInput.newKeys & MESSAGE_ADVANCE_KEYS) != 0)
 #endif
@@ -558,6 +562,10 @@ static void TextDispUpdate(TextRender* this) {
         speedModifier = 1;
     }
     this->typeSpeed -= speedModifier;
+#ifdef PC_PORT
+    if (Port_Config_GetInstantText())
+        this->typeSpeed = 0;
+#endif
 
     if (this->typeSpeed > 0) {
         return;
@@ -568,6 +576,10 @@ static void TextDispUpdate(TextRender* this) {
         numCharsToRead++;
         this->typeSpeed += speeds[this->message.textSpeed];
     } while (this->typeSpeed <= 0);
+#ifdef PC_PORT
+    if (Port_Config_GetInstantText())
+        numCharsToRead = 0x7FFF; /* the loop below stops at the break/pause */
+#endif
 
     pxDrawn = 0;
     do {

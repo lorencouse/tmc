@@ -29,6 +29,26 @@ void ram_IntrMain(void);
 static void sub_080171F0(void);
 static void HandlePlayerLife(Entity* this);
 
+#ifdef PC_PORT
+/* Port QoL "low_health_beep" (default normal): the low-health beep's cadence.
+ * Normal is vanilla's every 90 frames, slower every 270 (~4.5 s), off never.
+ * Only the SFX is gated; the threshold / needHealthDrop logic is untouched. */
+#include "port_runtime_config.h"
+static bool32 LowHealthBeepDue(s32 frameCount) {
+    switch (Port_Config_GetLowHealthBeep()) {
+        case PORT_LOW_HEALTH_BEEP_SLOWER:
+            return frameCount % 270 == 0;
+        case PORT_LOW_HEALTH_BEEP_OFF:
+            return FALSE;
+        default:
+            return frameCount % 90 == 0;
+    }
+}
+#define LOW_HEALTH_BEEP_DUE() LowHealthBeepDue(gRoomTransition.frameCount)
+#else
+#define LOW_HEALTH_BEEP_DUE() (gRoomTransition.frameCount % 90 == 0)
+#endif
+
 extern VBlankDMA gVBlankDMA;
 
 void sub_08016CA8(BgSettings* bg);
@@ -294,7 +314,7 @@ static void HandlePlayerLife(Entity* this) {
         return;
 
     if (REGION_IS_EU) {
-        if ((gHUD.hideFlags == HUD_HIDE_NONE) && gRoomTransition.frameCount % 90 == 0) {
+        if ((gHUD.hideFlags == HUD_HIDE_NONE) && LOW_HEALTH_BEEP_DUE()) {
             threshold = gSave.stats.maxHealth / 4;
             if (threshold > 24)
                 threshold = 24;
@@ -316,7 +336,7 @@ static void HandlePlayerLife(Entity* this) {
 
         if (gSave.stats.health <= threshold) {
             gRoomVars.needHealthDrop = TRUE;
-            if ((gHUD.hideFlags == HUD_HIDE_NONE) && gRoomTransition.frameCount % 90 == 0) {
+            if ((gHUD.hideFlags == HUD_HIDE_NONE) && LOW_HEALTH_BEEP_DUE()) {
                 EnqueueSFX(SFX_LOW_HEALTH);
             }
         }
