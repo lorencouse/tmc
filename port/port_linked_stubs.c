@@ -1599,7 +1599,10 @@ void Port_Widescreen_UpdateShadows(void) {
             }
         }
     }
-    if (getenv("TMC_WS_TRACE") != NULL) {
+    static int sWsTrace = -1; /* read once: this runs every VBlank */
+    if (sWsTrace < 0)
+        sWsTrace = getenv("TMC_WS_TRACE") != NULL;
+    if (sWsTrace) {
         static int sLastStretch = -1;
         int mask = 0;
         for (int i = 0; i < MODE1_GBA_BG_COUNT; i++) {
