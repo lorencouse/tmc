@@ -195,6 +195,9 @@ bool sRibbonCfg = true;        /* F8 menu style: ribbon (true) vs classic */
 /* Console/handheld settings shell: 0 auto (by window width), 1 on, 2 off.
  * See PORT_CONSOLE_UI_* in port_runtime_config.h. */
 int sConsoleUiMode = 0;
+/* Zoomed-out view (see port_widescreen.h): 0 = off, -1 = auto (the largest
+ * pixel size the window allows), N = N window pixels per game pixel. */
+int sViewZoom = 0;
 bool sMenuHintSeen = false;    /* set once the F8/settings menu is first opened */
 float sMasterVolume = 1.0f;    /* game master volume [0,1]; 1.0 = unchanged */
 float sMusicVolume = 1.0f;     /* music (BGM player) volume [0,1] */
@@ -373,6 +376,7 @@ const IntCfg kIntCfg[] = {
     { "tunic_color", &sTunicColor, 0 },
     { "heart_color", &sHeartColor, 0 },
     { "low_health_beep", &sLowHealthBeep, 0 },
+    { "view_zoom", &sViewZoom, 0 },
 };
 const StrCfg kStrCfg[] = {
     { "upscale_method", &sUpscaleMethod, "nearest" },
@@ -1195,7 +1199,7 @@ extern "C" const char* Port_Config_AspectModeName(PortAspectMode mode) {
             return "Pixel perfect (integer)";
         case PORT_ASPECT_NATIVE_3_2:
         default:
-            return "Native 3:2 (GBA)";
+            return "Original shape";
     }
 }
 
@@ -2060,6 +2064,18 @@ extern "C" void Port_Config_SetConsoleUiMode(int mode) {
         return;
     sConsoleUiMode = mode;
     sConfigJson["console_ui"] = mode;
+    SaveConfig();
+}
+extern "C" int Port_Config_ViewZoom(void) {
+    return (sViewZoom >= PORT_VIEW_ZOOM_AUTO && sViewZoom <= 10) ? sViewZoom : PORT_VIEW_ZOOM_OFF;
+}
+extern "C" void Port_Config_SetViewZoom(int zoom) {
+    if (zoom < PORT_VIEW_ZOOM_AUTO || zoom > 10)
+        zoom = PORT_VIEW_ZOOM_OFF;
+    if (zoom == sViewZoom)
+        return;
+    sViewZoom = zoom;
+    sConfigJson["view_zoom"] = zoom;
     SaveConfig();
 }
 extern "C" void Port_Config_CycleConsoleUiMode(int direction) {

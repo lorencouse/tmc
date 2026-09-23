@@ -107,6 +107,15 @@ int Port_Widescreen_CameraRestX(int target_x);
  * for the camera's rest y for the same equality-wait reason. */
 int Port_Widescreen_TargetViewHeight(void);
 int Port_Widescreen_EffectiveViewHeight(void);
+
+/* Zoomed-out view from the view_zoom setting (port_runtime_config.h): the
+ * target is the window divided by a whole pixel size, which sets both
+ * TargetViewWidth and TargetViewHeight unless TMC_WS_VIEW_* override them.
+ * ZoomFits says whether pixel size N gives a view wider than 240 that the
+ * framebuffer can hold on the current window; ZoomPixelSize is the size in
+ * use (0 = zoom off or nothing fits). */
+int Port_Widescreen_ZoomFits(int zoom);
+int Port_Widescreen_ZoomPixelSize(void);
 int Port_Widescreen_CameraRestY(int target_y);
 
 #ifdef __cplusplus
