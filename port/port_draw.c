@@ -344,6 +344,16 @@ static const u8* LookupFrameData(u16 spriteIndex, u8 frameIndex) {
  *     byte 3: tile index low byte
  *     byte 4: tile index high / palette addend
  */
+/* Tall view: full screen y per OAM slot, built alongside gOAMControls.oam
+ * and handed to the PPU by Port_CommitObjYFull at the same VBlank DMA that
+ * copies the OAM itself, so the two always describe the same frame. */
+static s16 sObjYFullPending[128];
+
+void Port_CommitObjYFull(void) {
+    extern s16 virtuappu_mode1_obj_y_full[128];
+    memcpy(virtuappu_mode1_obj_y_full, sObjYFullPending, sizeof(sObjYFullPending));
+}
+
 static void RenderSpritePieces(const u8* data, /* pointer to frame data (count byte + pieces) */
                                s16 baseX,      /* OAMCommand.x */
                                s16 baseY,      /* OAMCommand.y */
@@ -404,7 +414,12 @@ static void RenderSpritePieces(const u8* data, /* pointer to frame data (count b
     if (updated == 0) {
         memset(virtuappu_mode1_obj_clip_mark, 0, 128);
         virtuappu_mode1_obj_clip_enable = 0;
+        for (int k = 0; k < 128; k++)
+            sObjYFullPending[k] = -32768; /* MODE1_OBJ_Y_NONE */
     }
+    /* Tall view: cull against the live frame height and record each piece's
+     * full y, which attr0's 8 bits cannot carry past line 160. */
+    const s32 viewH = Port_Widescreen_EffectiveViewHeight();
     int sSwampClipActive = (sRenderingPlayer && gPlayerState.floor_type == SURFACE_SWAMP &&
                             gPlayerState.jump_status == 0 && gPlayerEntity.base.z.HALF.HI <= 0);
     if (sSwampClipActive) {
@@ -455,7 +470,7 @@ static void RenderSpritePieces(const u8* data, /* pointer to frame data (count b
 
         /* Clipping */
         y -= (s32)se[1]; /* subtract y anchor */
-        if (y >= 160) {
+        if (y >= viewH) {
             continue;
         }
         if (y + (s32)se[3] <= 0) {
@@ -501,6 +516,7 @@ static void RenderSpritePieces(const u8* data, /* pointer to frame data (count b
          * clip in ViruaPPU (see RenderSpritePieces top + port_gba_mem). */
         if (sSwampClipActive)
             virtuappu_mode1_obj_clip_mark[updated & 0x7F] = 1;
+        sObjYFullPending[updated & 0x7F] = (s16)y;
 
         updated++;
     }
@@ -627,7 +643,7 @@ u32 CheckOnScreen(Entity* entity) {
     s32 y = (s32)entity->y.HALF.HI - (s32)gRoomControls.scroll_y;
     y += (s32)entity->z.HALF.HI;
     y += 0x3F;
-    if ((u32)y >= 0x11E)
+    if ((u32)y >= (u32)Port_Widescreen_EffectiveViewHeight() + 0x7E)
         return 0;
 
     return 1;

@@ -159,16 +159,18 @@ bool WriteScreenshotPNG(const std::filesystem::path& path) {
         return false;
     }
 
-    const int outW =
-        (Port_Widescreen_IsActive() && Port_Widescreen_ShadowsLive()) ? Port_Widescreen_EffectiveViewWidth() : 240;
+    const bool wideLive = Port_Widescreen_IsActive() && Port_Widescreen_ShadowsLive();
+    const int outW = wideLive ? Port_Widescreen_EffectiveViewWidth() : 240;
+    /* Tall view (zoom-out) frames are taller than the GBA's 160 lines. */
+    const int outH = wideLive ? Port_Widescreen_EffectiveViewHeight() : kFrameH;
 
     png_init_io(png, fp);
-    png_set_IHDR(png, info, outW, kFrameH, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+    png_set_IHDR(png, info, outW, outH, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
                  PNG_FILTER_TYPE_DEFAULT);
     png_write_info(png, info);
 
     uint8_t row[kFrameW * 3];
-    for (int y = 0; y < kFrameH; y++) {
+    for (int y = 0; y < outH; y++) {
         const uint32_t* src = &virtuappu_frame_buffer[y * kFrameW];
         for (int x = 0; x < outW; x++) {
             uint32_t p = src[x];

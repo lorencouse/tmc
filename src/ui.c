@@ -111,6 +111,15 @@ void DrawUIElements(void) {
 #endif
             gOamCmd.x = element->x;
             gOamCmd.y = element->y;
+#ifdef PC_PORT
+            /* Tall view: the HUD is laid out for 160 lines; keep the lower
+             * half (the Ezlo nag) at the bottom edge, like BG0's split. y is
+             * a u16 holding a signed position (buttons sliding off the top
+             * go negative), so compare it signed. */
+            if ((s16)element->y >= 80 && (s16)element->y < 160 && Port_Widescreen_EffectiveViewHeight() > 160) {
+                gOamCmd.y = (s16)element->y + Port_Widescreen_EffectiveViewHeight() - 160;
+            }
+#endif
             definition = &gUIElementDefinitions[element->type];
             gOamCmd._4 = definition->unk_0;
             gOamCmd._6 = definition->unk_2;

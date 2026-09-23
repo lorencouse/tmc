@@ -330,9 +330,17 @@ void MessageNoOverlap(u32 index, Entity* entity) {
     y = entity->y.HALF.HI;
     height = entity->z.HALF.HI;
 
+#if defined(PC_PORT) && defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+    /* 0x58 is half the 160-line screen plus 8; the tall view is taller. */
+    extern int Port_Widescreen_EffectiveViewHeight(void);
+    if (((y + height) - gRoomControls.scroll_y) > Port_Widescreen_EffectiveViewHeight() / 2 + 8) {
+        gMessage.textWindowPosY = 1;
+    }
+#else
     if (((y + height) - gRoomControls.scroll_y) > 0x58) {
         gMessage.textWindowPosY = 1;
     }
+#endif
 }
 
 void MessageAtHeight(u32 index, u32 y) {

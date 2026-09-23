@@ -20,6 +20,9 @@ typedef struct PPUMemory {
      * means tightly packed rows (`frame_width`). Kept separate so ports can
      * render a 240-wide viewport into a wider fixed-pitch buffer. */
     uint16_t frame_pitch;
+    /* Visible scanlines. 0 means the native 160. Taller frames (up to
+     * MODE1_MAX_FRAME_HEIGHT) are the port's zoomed-out gameplay view. */
+    uint16_t frame_height;
     uint8_t mode;
     uint8_t reserved;
 } PPUMemory;

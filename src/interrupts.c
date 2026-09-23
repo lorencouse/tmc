@@ -102,6 +102,12 @@ void UpdateDisplayControls(void) {
         gOAMControls.field_0x0 = 0;
 
         DmaCopy32(3, &gOAMControls.oam, OAM, OAM_SIZE);
+#ifdef PC_PORT
+        {
+            extern void Port_CommitObjYFull(void);
+            Port_CommitObjYFull();
+        }
+#endif
 
     }
     sub_08016CA8(&gScreen.bg0);

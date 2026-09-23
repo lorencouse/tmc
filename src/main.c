@@ -338,13 +338,15 @@ u32 CheckRegionOnScreen(u32 x0, u32 y0, u32 x1, u32 y1) {
     /* Room-managed objects (including house doors) must spawn throughout
      * the rendered viewport, including its widescreen margins. */
     u32 width = Port_Widescreen_EffectiveViewWidth();
+    u32 height = Port_Widescreen_EffectiveViewHeight();
 #else
     u32 width = DISPLAY_WIDTH;
+    u32 height = DISPLAY_HEIGHT;
 #endif
     u32 x = ((gRoomControls.scroll_x - gRoomControls.origin_x) - x0 + width);
-    u32 y = ((gRoomControls.scroll_y - gRoomControls.origin_y) - y0 + DISPLAY_HEIGHT);
+    u32 y = ((gRoomControls.scroll_y - gRoomControls.origin_y) - y0 + height);
     u32 a = x1 + width;
-    u32 b = y1 + DISPLAY_HEIGHT;
+    u32 b = y1 + height;
     if ((x < a) && (y < b))
         result = TRUE;
     else
