@@ -5847,6 +5847,13 @@ extern "C" bool Port_ImGui_BuildFrame(void) {
         sConsoleRestoreCursor = true;
     }
     sPrevMenuOpen = menuOpen;
+    /* The file-select sidebar feeds the same injected nav keys (port_bios.c)
+     * and closes on the key-down of B / A, so that key's up never arrives. */
+    static bool sPrevFileMenuOpen = false;
+    const bool fileMenuOpen = Port_RandoFileMenu_IsOpen();
+    if (sPrevFileMenuOpen && !fileMenuOpen)
+        ConsoleReleaseInjectedNav();
+    sPrevFileMenuOpen = fileMenuOpen;
 
     /* Soft-slot config overlay — replaces the SDL_Renderer-only popup
      * from port_softslots.c with an ImGui equivalent so it works on
