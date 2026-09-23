@@ -1053,13 +1053,18 @@ void VBlankIntrWait(void) {
          * cadence. If we fall more than one frame behind real time
          * (e.g. paused at a breakpoint, OS hitch), snap forward so we
          * don't burn CPU catching up. */
-        if (!sFastForward) {
+        /* A capped fast-forward (fast_forward_speed > 0) paces at speed x the
+         * normal frame rate, which in this loop is the game speed. */
+        const float ffSpeed = sFastForward ? Port_Config_FastForwardSpeed() : 0.0f;
+        if (!sFastForward || ffSpeed > 0.0f) {
             u64 frameTimeNs = Port_Config_FrameTimeNs();
-            /* Practice slow-motion: stretch the target frame interval. Factor is
-             * in (0,1]; 1.0 = normal speed, 0.5 = half speed. When the target is
-             * uncapped (0), synthesise a 60fps base so slow-mo still applies.
-             * Bypassed during TAB fast-forward (we're inside !sFastForward). */
-            {
+            if (sFastForward) {
+                frameTimeNs = (u64)((double)(frameTimeNs ? frameTimeNs : 16666667ULL) / ffSpeed);
+            } else {
+                /* Practice slow-motion: stretch the target frame interval. Factor
+                 * is in (0,1]; 1.0 = normal speed, 0.5 = half speed. When the
+                 * target is uncapped (0), synthesise a 60fps base so slow-mo
+                 * still applies. Bypassed during fast-forward. */
                 float sm = Port_Config_GetPracticeSlowmo();
                 if (sm > 0.0f && sm < 0.999f) {
                     u64 base = frameTimeNs ? frameTimeNs : 16666667ULL;
