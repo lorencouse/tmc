@@ -51,6 +51,7 @@ extern "C" void Port_ApplyLanguage(void);
 #include "port_widescreen.h"
 #include "port_gpu_renderer.h"
 #include "port_prelaunch_logo.h"
+#include "port_present_thread.h" /* Port_PresentThread_Drain -- UI rescale on resize */
 #include "port_reborn.h"
 #include "port_discord_rpc.h" /* Port_DiscordRpc_IsEnabled / SetEnabled */
 #include "port_tts.h"         /* Port_TTS_* — accessibility tab + focus reader */
@@ -117,32 +118,78 @@ static SDL_Window* sWindow = nullptr;
 /* See the small-display pass in Port_ImGui_Init: one scale factor for
  * fonts, style metrics and the fixed pixel panel sizes. */
 static SDL_Window* sUiScaleWindow = NULL;
-static float Port_UiScale(void) {
-    static float sScale = -1.0f;
-    if (sScale < 0.0f) {
-        const char* e = getenv("TMC_UI_SCALE");
-        float v = (e && *e) ? (float)atof(e) : 0.0f;
-        if (v <= 0.0f) {
-            int w = 0, h = 0;
-            if (sUiScaleWindow) SDL_GetWindowSize(sUiScaleWindow, &w, &h);
-            /* Scale with the window relative to the 640x480 the panels
-             * were sized for, so the overlay covers the same share of the
-             * screen on a 1280x720 TrimUI Smart Pro (1.5) as on a 640x480
-             * RG35XX SP (1.0), and shrinks on 320x240 (0.5). Reported by a
-             * TSP tester as "menu very hard to read" at the fixed 1.0. */
-            if (w > 0 && h > 0) {
-                const float sw = (float)w / 640.0f, sh = (float)h / 480.0f;
-                v = sw < sh ? sw : sh;
-                if (v < 0.5f) v = 0.5f;
-                if (v > 2.0f) v = 2.0f;
-                v = SDL_floorf(v * 20.0f) / 20.0f;
-            } else {
-                v = 1.0f;
+static float sUiScale = 1.0f;
+/* The style and font scale as they stood before the scale pass, so a later
+ * rescale starts from the design sizes instead of compounding the rounding
+ * of the previous scale. */
+static ImGuiStyle sUiBaseStyle;
+static float sUiBaseFontScale = 1.0f;
+static float sUiAppliedScale = 1.0f;
+
+/* Measure what the overlay is drawn at and derive the scale from it.
+ * Called from Port_ImGui_Init and again whenever the window's pixel size
+ * changes: Port_ImGui_Init runs inside Port_PPU_Init, before the game asks
+ * for fullscreen, so a scale computed once there measured the 240x160*N
+ * window instead of the panel (a half-size overlay on a 1280x720 handheld
+ * until restart). `renderer` may be NULL (SDL_GPU backend). */
+static void Port_UiScale_Measure(SDL_Renderer* renderer) {
+    const char* e = getenv("TMC_UI_SCALE");
+    float v = (e && *e) ? (float)atof(e) : 0.0f;
+    if (v <= 0.0f) {
+        int w = 0, h = 0;
+        /* The renderer's real output first, as the boot splash does
+         * (d573de767): fullscreen on a handheld the window can still report
+         * the size it asked for. The output is in pixels; ImGui lays out in
+         * window units, so bring it back by the window's pixel density
+         * (1:1 on a handheld, 2:1 on a HiDPI desktop). */
+        if (renderer && SDL_GetCurrentRenderOutputSize(renderer, &w, &h) && w > 0 && h > 0) {
+            int ww = 0, wh = 0, pw = 0, ph = 0;
+            if (sUiScaleWindow && SDL_GetWindowSize(sUiScaleWindow, &ww, &wh) &&
+                SDL_GetWindowSizeInPixels(sUiScaleWindow, &pw, &ph) && ww > 0 && wh > 0 && pw > 0 && ph > 0) {
+                w = (int)((long long)w * ww / pw);
+                h = (int)((long long)h * wh / ph);
             }
+        } else {
+            w = h = 0;
+            if (sUiScaleWindow)
+                SDL_GetWindowSize(sUiScaleWindow, &w, &h);
         }
-        sScale = v;
+        /* Scale with the window relative to the 640x480 the panels
+         * were sized for, so the overlay covers the same share of the
+         * screen on a 1280x720 TrimUI Smart Pro (1.5) as on a 640x480
+         * RG35XX SP (1.0), and shrinks on 320x240 (0.5). Reported by a
+         * TSP tester as "menu very hard to read" at the fixed 1.0. */
+        if (w > 0 && h > 0) {
+            const float sw = (float)w / 640.0f, sh = (float)h / 480.0f;
+            v = sw < sh ? sw : sh;
+            if (v < 0.5f) v = 0.5f;
+            if (v > 2.0f) v = 2.0f;
+            v = SDL_floorf(v * 20.0f) / 20.0f;
+        } else {
+            v = 1.0f;
+        }
     }
-    return sScale;
+    sUiScale = v;
+}
+
+static float Port_UiScale(void) {
+    return sUiScale;
+}
+
+/* Scale fonts and style metrics to sUiScale, from the unscaled snapshot. */
+static void Port_UiScale_Apply(void) {
+#ifndef __ANDROID__ /* the touch pass in Port_ImGui_Init owns Android's sizes */
+    if (sUiScale == sUiAppliedScale)
+        return;
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImGuiStyle scaled = sUiBaseStyle;
+    memcpy(scaled.Colors, style.Colors, sizeof(scaled.Colors)); /* themed after the snapshot */
+    if (sUiScale != 1.0f)
+        scaled.ScaleAllSizes(sUiScale);
+    style = scaled;
+    ImGui::GetIO().FontGlobalScale = sUiBaseFontScale * sUiScale;
+    sUiAppliedScale = sUiScale;
+#endif
 }
 
 static SDL_Renderer* sRenderer = nullptr;
@@ -220,11 +267,15 @@ extern "C" void Port_ImGui_Init(SDL_Window* window, SDL_Renderer* renderer) {
      * window size relative to 640x480 (see Port_UiScale). */
     {
         sUiScaleWindow = window;
+        sUiBaseStyle = style;
+        sUiBaseFontScale = io.FontGlobalScale;
+        Port_UiScale_Measure(renderer);
         const float s = Port_UiScale();
         if (s != 1.0f) {
             io.FontGlobalScale *= s;
             style.ScaleAllSizes(s);
         }
+        sUiAppliedScale = s;
     }
 #ifdef __ANDROID__
     /* Touch pass: a tablet is driven by fingers at arm's length, not a
@@ -394,6 +445,18 @@ extern "C" void Port_ImGui_HandleEvent(const SDL_Event* event) {
     if (!sImGuiInited)
         return;
     ImGui_ImplSDL3_ProcessEvent(event);
+    /* Follow the window to its real size -- the fullscreen switch lands
+     * after Port_ImGui_Init, and a desktop user can resize. RESIZED too, for
+     * an SDL (or SDL3-on-SDL2 shim) that reports only that one. */
+    if ((event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event->type == SDL_EVENT_WINDOW_RESIZED) &&
+        sUiScaleWindow && event->window.windowID == SDL_GetWindowID(sUiScaleWindow)) {
+        /* The present worker may be mid-frame on the renderer; let it
+         * finish before asking the renderer for its output size. No-op
+         * when the worker is off. */
+        Port_PresentThread_Drain();
+        Port_UiScale_Measure(sRenderer);
+        Port_UiScale_Apply();
+    }
 #ifdef __ANDROID__
     /* Touch drag-to-scroll: ImGui has no native flick/drag scrolling —
      * on desktop the wheel does it; on a tablet nothing does, and long
