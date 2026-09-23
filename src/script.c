@@ -1,4 +1,7 @@
 #include "script.h"
+#ifdef PC_PORT
+#include "port_widescreen.h"
+#endif
 #include "area.h"
 #include "asm.h"
 #include "common.h"
@@ -2514,8 +2517,13 @@ void sub_0807FB94(Entity* entity, ScriptExecutionContext* context) {
 }
 
 void sub_0807FBA0(Entity* entity, ScriptExecutionContext* context) {
+#ifdef PC_PORT
+    entity->x.HALF.HI = gRoomControls.scroll_x + Port_Widescreen_EffectiveViewWidth() / 2;
+    entity->y.HALF.HI = gRoomControls.scroll_y + Port_Widescreen_EffectiveViewHeight() / 2;
+#else
     entity->x.HALF.HI = gRoomControls.scroll_x + 120;
     entity->y.HALF.HI = gRoomControls.scroll_y + 80;
+#endif
 }
 
 void sub_0807FBB4(Entity* entity, ScriptExecutionContext* context) {

@@ -22,6 +22,12 @@ extern int Port_Widescreen_EffectiveViewWidth(void);
 #else
 #define WS_VIEW_W 240u
 #endif
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+extern int Port_Widescreen_EffectiveViewHeight(void);
+#define WS_VIEW_H ((u32)Port_Widescreen_EffectiveViewHeight())
+#else
+#define WS_VIEW_H 160u
+#endif
 
 typedef struct {
     /*0x00*/ Entity base;
@@ -124,7 +130,7 @@ void sub_0806BEFC(void) {
 void sub_0806BF44(Entity* this, ScriptExecutionContext* context) {
     context->condition = 0;
     if (((this->x.HALF.HI - gRoomControls.scroll_x) + 0x10U < WS_VIEW_W + 0x20U) &&
-        ((this->y.HALF.HI - gRoomControls.scroll_y) + 0x18U < 0xD0)) {
+        ((this->y.HALF.HI - gRoomControls.scroll_y) + 0x18U < WS_VIEW_H + 0x30U)) {
         context->condition = 1;
     }
 }

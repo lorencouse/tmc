@@ -22,6 +22,12 @@ extern int Port_Widescreen_EffectiveViewWidth(void);
 #else
 #define WS_VIEW_W 240u
 #endif
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+extern int Port_Widescreen_EffectiveViewHeight(void);
+#define WS_VIEW_H ((u32)Port_Widescreen_EffectiveViewHeight())
+#else
+#define WS_VIEW_H 160u
+#endif
 
 typedef struct {
     Entity base;
@@ -309,7 +315,7 @@ void sub_08039140(CuccoAggrEntity* this) {
 bool32 CuccoAggr_IsOutsideScroll(CuccoAggrEntity* this) {
     if ((u32)super->x.HALF.HI - 0xc - gRoomControls.scroll_x > WS_VIEW_W + 0x18)
         return 1;
-    if ((u32)super->y.HALF.HI - 0xc - gRoomControls.scroll_y > 0xb8)
+    if ((u32)super->y.HALF.HI - 0xc - gRoomControls.scroll_y > WS_VIEW_H + 0x18)
         return 1;
 
     return 0;

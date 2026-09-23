@@ -17,6 +17,18 @@
 #include "script.h"
 #include "save.h"
 #include "message.h"
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+extern int Port_Widescreen_EffectiveViewWidth(void);
+#define WS_VIEW_W ((s32)Port_Widescreen_EffectiveViewWidth())
+#else
+#define WS_VIEW_W 240
+#endif
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+extern int Port_Widescreen_EffectiveViewHeight(void);
+#define WS_VIEW_H ((s32)Port_Widescreen_EffectiveViewHeight())
+#else
+#define WS_VIEW_H 160
+#endif
 
 typedef struct {
     /*0x00*/ Entity base;
@@ -291,11 +303,11 @@ void CheckLastSwordMove(Entity* this, ScriptExecutionContext* context) {
 u32 sub_080644C8(GuardWithSpearEntity* this) {
     if (super->x.HALF.HI - gRoomControls.scroll_x + 8 < 0)
         return 0;
-    if (super->x.HALF.HI - gRoomControls.scroll_x - 8 > DISPLAY_WIDTH)
+    if (super->x.HALF.HI - gRoomControls.scroll_x - 8 > WS_VIEW_W)
         return 0;
     if (super->y.HALF.HI - gRoomControls.scroll_y < 0)
         return 0;
-    if (super->y.HALF.HI - gRoomControls.scroll_y - 0x18 > DISPLAY_HEIGHT)
+    if (super->y.HALF.HI - gRoomControls.scroll_y - 0x18 > WS_VIEW_H)
         return 0;
     return 1;
 }

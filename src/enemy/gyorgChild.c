@@ -20,6 +20,12 @@ extern int Port_Widescreen_EffectiveViewWidth(void);
 #else
 #define WS_VIEW_W 240
 #endif
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+extern int Port_Widescreen_EffectiveViewHeight(void);
+#define WS_VIEW_H ((s32)Port_Widescreen_EffectiveViewHeight())
+#else
+#define WS_VIEW_H 160
+#endif
 
 void GyorgChild_OnTick(GyorgChildEntity*);
 void GyorgChild_OnCollision(GyorgChildEntity*);
@@ -140,7 +146,7 @@ void GyorgChild_Action1(GyorgChildEntity* this) {
             }
             break;
         case 2:
-            if (super->y.HALF.HI < gRoomControls.scroll_y + 0xb8) {
+            if (super->y.HALF.HI < gRoomControls.scroll_y + WS_VIEW_H + 0x18) {
                 return;
             }
             break;
@@ -201,7 +207,7 @@ void GyorgChild_Action3(GyorgChildEntity* this) {
             }
             break;
         case 2:
-            if (super->y.HALF.HI < gRoomControls.scroll_y + 0xc8) {
+            if (super->y.HALF.HI < gRoomControls.scroll_y + WS_VIEW_H + 0x28) {
                 return;
             }
             break;
