@@ -120,6 +120,20 @@ bool Port_Config_WidescreenEnabled(void);
 void Port_Config_SetWidescreenEnabled(bool enabled);
 void Port_Config_ToggleWidescreen(void);
 
+/* Zoomed-out view, under widescreen_enabled: the gameplay frame is the
+ * window divided by a whole pixel size, so more world shows at an exact
+ * integer scale (640x480 at 2x -> 320x240). OFF keeps the aspect-driven
+ * widescreen width at 160 lines; AUTO takes the largest pixel size that
+ * still zooms out; N asks for exactly N and falls back to AUTO on a window
+ * where N does not fit (Port_Widescreen_ZoomPixelSize resolves it).
+ * Persisted as "view_zoom". */
+enum {
+    PORT_VIEW_ZOOM_AUTO = -1,
+    PORT_VIEW_ZOOM_OFF = 0,
+};
+int Port_Config_ViewZoom(void);
+void Port_Config_SetViewZoom(int zoom);
+
 /* Console-Parity mode. When ON the port is held provably equivalent to real
  * GBA hardware for speedrun integrity: the sub-frame input edge cache is
  * disabled (hardware 1-frame input granularity), save-states (F1-F6) are

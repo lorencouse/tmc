@@ -1075,9 +1075,42 @@ void Port_Widescreen_SetWindowPixels(int w, int h) {
     sWsWindowH = h;
 }
 
+/* A pixel size fits when the window divided by it is wider than the GBA
+ * view and within the framebuffer:
+ * (240, MODE1_GBA_WIDTH] x [160, MODE1_MAX_FRAME_HEIGHT]. The division may
+ * leave a remainder under one game pixel; the presenter centres it. */
+int Port_Widescreen_ZoomFits(int zoom) {
+    int w, h;
+    if (zoom < 1 || sWsWindowW <= 0 || sWsWindowH <= 0) {
+        return 0;
+    }
+    w = sWsWindowW / zoom;
+    h = sWsWindowH / zoom;
+    return w > 240 && w <= MODE1_GBA_WIDTH && h >= 160 && h <= MODE1_MAX_FRAME_HEIGHT;
+}
+
+int Port_Widescreen_ZoomPixelSize(void) {
+    int zoom = Port_Config_ViewZoom();
+    int n;
+    if (zoom == PORT_VIEW_ZOOM_OFF) {
+        return 0;
+    }
+    if (zoom > 0 && Port_Widescreen_ZoomFits(zoom)) {
+        return zoom;
+    }
+    /* AUTO, or a size this window cannot take: the biggest pixels that
+     * still show more than the GBA did. */
+    for (n = 10; n >= 1; n--) {
+        if (Port_Widescreen_ZoomFits(n)) {
+            return n;
+        }
+    }
+    return 0;
+}
+
 int Port_Widescreen_TargetViewWidth(void) {
     static int env_w = -1;
-    int w;
+    int w, zoom;
     if (env_w < 0) {
         const char* e = getenv("TMC_WS_VIEW_WIDTH");
         env_w = 0;
@@ -1093,6 +1126,10 @@ int Port_Widescreen_TargetViewWidth(void) {
     if (sWsWindowW <= 0 || sWsWindowH <= 0) {
         return 240;
     }
+    zoom = Port_Widescreen_ZoomPixelSize();
+    if (zoom > 0) {
+        return sWsWindowW / zoom;
+    }
     /* Exact aspect fit: the width that makes the 160-line frame fill the
      * window (no rounding — every consumer is pixel-based, and exact fit
      * beats up-to-7px side bars). */
@@ -1106,16 +1143,26 @@ int Port_Widescreen_TargetViewWidth(void) {
 
 int Port_Widescreen_TargetViewHeight(void) {
     static int env_h = -1;
+    static int env_w_set = 0;
+    int zoom;
     if (env_h < 0) {
         const char* e = getenv("TMC_WS_VIEW_HEIGHT");
-        env_h = 160;
+        env_w_set = getenv("TMC_WS_VIEW_WIDTH") != NULL;
+        env_h = 0;
         if (e && *e) {
             int v = atoi(e);
             if (v > 160 && v <= MODE1_MAX_FRAME_HEIGHT)
                 env_h = v;
         }
     }
-    return env_h;
+    if (env_h > 0) {
+        return env_h;
+    }
+    /* TMC_WS_VIEW_WIDTH alone keeps its old meaning: a wide 160-line view. */
+    if (!env_w_set && (zoom = Port_Widescreen_ZoomPixelSize()) > 0) {
+        return sWsWindowH / zoom;
+    }
+    return 160;
 }
 
 /* Widest view the current room can honestly feed: the window-aspect target
@@ -1551,6 +1598,13 @@ int Port_Widescreen_TargetViewHeight(void) {
 }
 int Port_Widescreen_EffectiveViewHeight(void) {
     return 160;
+}
+int Port_Widescreen_ZoomFits(int zoom) {
+    (void)zoom;
+    return 0;
+}
+int Port_Widescreen_ZoomPixelSize(void) {
+    return 0;
 }
 int Port_Widescreen_CameraRestY(int target_y) {
     int lo = (int)gRoomControls.origin_y;

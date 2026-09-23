@@ -24,6 +24,66 @@ static void StepperRow(const char* label, const char* id,
     if (ImGui::Button(tag)) onCycle(+1);
 }
 
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+/* The View row's choices on the current window, in order: Original
+ * (widescreen off), Wide (widescreen at 160 lines; only where the window is
+ * wider than 3:2, else it looks the same as Original), then each zoom pixel
+ * size that fits, biggest pixels first. A choice is 0 = Original,
+ * -1 = Wide, N = zoomed out at N. */
+static int ViewModeChoices(int* out, int cap) {
+    const ImVec2 vp = ImGui::GetIO().DisplaySize;
+    int n = 0;
+    out[n++] = 0;
+    if (vp.y > 0.0f && vp.x * 160.0f / vp.y > 240.0f)
+        out[n++] = -1;
+    for (int z = 10; z >= 1 && n < cap; --z) {
+        if (Port_Widescreen_ZoomFits(z))
+            out[n++] = z;
+    }
+    return n;
+}
+
+static int ViewModeCurrent(void) {
+    if (!Port_Config_WidescreenEnabled())
+        return 0;
+    const int z = Port_Widescreen_ZoomPixelSize();
+    if (z > 0)
+        return z;
+    const ImVec2 vp = ImGui::GetIO().DisplaySize;
+    return (vp.y > 0.0f && vp.x * 160.0f / vp.y > 240.0f) ? -1 : 0;
+}
+
+static const char* ViewModeValue(char* b, size_t n) {
+    const int cur = ViewModeCurrent();
+    if (cur == 0)
+        return "Original";
+    if (cur < 0)
+        return "Wide";
+    std::snprintf(b, n, "Zoomed out %dx (%dx%d)", cur, Port_Widescreen_TargetViewWidth(),
+                  Port_Widescreen_TargetViewHeight());
+    return b;
+}
+
+static void CycleViewMode(int direction) {
+    int choices[12];
+    const int count = ViewModeChoices(choices, 12);
+    const int cur = ViewModeCurrent();
+    int at = 0;
+    for (int i = 0; i < count; ++i) {
+        if (choices[i] == cur)
+            at = i;
+    }
+    at = (at + (direction < 0 ? count - 1 : 1)) % count;
+    const int next = choices[at];
+    const bool wasWide = Port_Config_WidescreenEnabled();
+    if (next != 0)
+        Port_Config_SetViewZoom(next > 0 ? next : PORT_VIEW_ZOOM_OFF);
+    Port_Config_SetWidescreenEnabled(next != 0);
+    if (wasWide != (next != 0))
+        Port_PPU_ApplyWindowScale();
+}
+#endif
+
 static void DrawRibbonDisplayTab(void) {
     const bool gpuActive = Port_GPU_IsActive();
 
@@ -106,9 +166,29 @@ static void DrawRibbonDisplayTab(void) {
             "nearest-neighbour 2D output it has no visible effect. Leave at 1x "
             "unless a shader you're using benefits from supersampling.");
 
-        StepperRow("Aspect ratio", "aspect",
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+        ImGui::BeginDisabled(Port_Config_GetConsoleParity());
+        StepperRow("View", "view", ViewModeValue, CycleViewMode);
+        ImGui::EndDisabled();
+        RandoUi_HelpTooltip(
+            "How much of the world the camera shows. 'Original' is the GBA's "
+            "240x160. 'Wide' shows extra world at the sides on a screen wider "
+            "than 3:2. 'Zoomed out' shows more world in every direction at a "
+            "whole number of screen pixels per game pixel: a bigger number "
+            "means bigger graphics and less world. Small rooms and menus stay "
+            "at the original size. Console-Parity mode keeps 'Original'.");
+#endif
+
+        StepperRow("Screen fit", "aspect",
                    [](char*, size_t) { return Port_Config_AspectModeName(Port_Config_AspectMode()); },
                    Port_Config_CycleAspectMode);
+        RandoUi_HelpTooltip(
+            "How the picture fills the screen. 'Original shape' keeps the "
+            "game's proportions with bars where they do not match the screen. "
+            "'Stretch to fill' covers the whole screen. 'Pixel perfect' uses "
+            "the largest whole-number scale, so every pixel is the same size. "
+            "The 16:9 / 21:9 / 32:9 settings frame the picture for wide "
+            "monitors.");
 
         /* Which settings shell the F8 menu draws. Auto picks the console
          * one on a narrow window (a handheld panel); a desktop user who
