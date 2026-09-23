@@ -81,6 +81,9 @@ u8 sInternalScale = 1;
  * below the refresh (the RG35XX SP ships 15: a ~8 ms software copy per
  * present at 60 Hz was half the fast-forward budget). */
 int sFastForwardFps = 60;
+/* Fast-forward speed as a multiple of normal speed; 0 = as fast as the CPU
+ * allows (the historical behaviour). */
+float sFastForwardSpeed = 0.0f;
 /* Re-seat the tick grid on each vsync-blocked present when the display refresh
  * equals the tick rate (see the decoupled pacer in port_bios.c). */
 bool sVsyncLockTicks = false; /* opt-in: right only when the present really blocks on a refresh at the tick rate */
@@ -373,6 +376,7 @@ const FloatCfg kFloatCfg[] = {
     { "lcd_persistence_rho", &sLcdPersistRho, 0.35 },
     { "master_volume", &sMasterVolume, 1.0 },
     { "analog_deadzone", &sAnalogDeadzone, 0.30 },
+    { "fast_forward_speed", &sFastForwardSpeed, 0.0 },
 };
 const ScaleCfg kScaleCfg[] = {
     { "window_scale", &sScale, 3, 1, 10 },
@@ -885,6 +889,12 @@ extern "C" u32 Port_Config_FastForwardFps(void) {
     if (v > 240)
         v = 240;
     return (u32)v;
+}
+extern "C" float Port_Config_FastForwardSpeed(void) {
+    /* Below 1x is not fast-forward; above 20x the cap never binds. */
+    if (!(sFastForwardSpeed >= 1.0f) || sFastForwardSpeed > 20.0f)
+        return 0.0f;
+    return sFastForwardSpeed;
 }
 extern "C" bool Port_Config_GetPresentThread(void) {
     /* TMC_PRESENT_THREAD=<0|1> overrides for one session, so a device can be

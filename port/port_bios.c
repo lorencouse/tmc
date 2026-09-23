@@ -1084,7 +1084,8 @@ void VBlankIntrWait(void) {
          * an engine tick. ---- */
         u64 entryNs = SDL_GetTicksNS();
         u32 targetFps = Port_Config_TargetFps();
-        bool uncappedTicks = sFastForward || targetFps == 0;
+        const float ffSpeed = sFastForward ? Port_Config_FastForwardSpeed() : 0.0f;
+        bool uncappedTicks = (sFastForward && ffSpeed == 0.0f) || targetFps == 0;
         u64 tickPeriodNs = 0;
         u64 renderPeriodNs;
         u64 now;
@@ -1098,6 +1099,9 @@ void VBlankIntrWait(void) {
 
         if (!uncappedTicks) {
             tickPeriodNs = Port_Config_TickTimeNs();
+            /* A capped fast-forward runs the tick grid at speed x normal. */
+            if (ffSpeed > 0.0f)
+                tickPeriodNs = (u64)((double)tickPeriodNs / ffSpeed);
             /* Practice slow-motion stretches the tick period only; presents
              * keep their real-time cadence, so slow-mo stays visually fluid. */
             float sm = Port_Config_GetPracticeSlowmo();
@@ -1185,6 +1189,24 @@ void VBlankIntrWait(void) {
                 sNextPresentNs = SDL_GetTicksNS() + renderPeriodNs;
             }
             lastFrameNs = SDL_GetTicksNS();
+        } else if (ffSpeed > 0.0f) {
+            /* Capped fast-forward: the uncapped path's present rule (only when
+             * the fast-forward render grid comes due), then sleep out the rest
+             * of the tick. The general path below would force a present every
+             * third tick, which at 3x is 60 presents a second -- on a handheld
+             * that is where the speed goes. */
+            if (now >= sNextPresentNs) {
+                Port_PresentOnce(true);
+                sNextPresentNs = SDL_GetTicksNS() + renderPeriodNs;
+            }
+            u64 deadline = lastFrameNs + tickPeriodNs;
+            now = SDL_GetTicksNS();
+            if (now > deadline + tickPeriodNs) {
+                deadline = now; /* behind the grid: snap, do not burst */
+            } else if (now < deadline) {
+                SDL_DelayPrecise(deadline - now);
+            }
+            lastFrameNs = deadline;
         } else {
             u64 deadline = lastFrameNs + tickPeriodNs;
             if (now > deadline + tickPeriodNs) {
