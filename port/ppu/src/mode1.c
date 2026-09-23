@@ -754,8 +754,15 @@ void virtuappu_mode1_render_obj_line(int line, bool obj_1d, uint32_t* line_buffe
         }
         /* Tall view: attr0 holds only 8 bits of y, which cannot tell line 200
          * from -56. The port records the full y per slot. */
-        if (mode1_frame_height > MODE1_GBA_HEIGHT && virtuappu_mode1_obj_y_full[i] != MODE1_OBJ_Y_NONE) {
-            obj_y = virtuappu_mode1_obj_y_full[i];
+        if (virtuappu_mode1_obj_y_full[i] != MODE1_OBJ_Y_NONE) {
+            if (mode1_frame_height > MODE1_GBA_HEIGHT) {
+                obj_y = virtuappu_mode1_obj_y_full[i];
+            } else if (virtuappu_mode1_obj_y_full[i] >= MODE1_GBA_HEIGHT) {
+                /* Below a 160-line frame (the engine can cull for the tall
+                 * view while an overlay screen keeps the frame native): the
+                 * 8-bit y would wrap it to the top of the screen. */
+                continue;
+            }
         }
         if (line < obj_y || line >= obj_y + bounds_height) {
             continue;
