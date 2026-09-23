@@ -84,6 +84,79 @@ u64 DivAndModCombined(s32 num, s32 denom) {
     return ((u64)(u32)remainder << 32) | (u32)quotient;
 }
 
+/* Select chords (config "select_state_chords", off by default).
+ *
+ * A pad with no spare buttons can still reach the save-state picker and the
+ * soft slots: X and Y stay the soft slots, and Select + X / Select + Y open
+ * the picker on its save / load page. The catch is that Select is not free in
+ * gameplay -- holding it asks Ezlo for a hint (CanDispEzloMessage) -- so in
+ * gameplay Select is held back from the game until it is clearly not a chord:
+ * a tap is delivered on release, a hold is delivered after
+ * SELECT_CHORD_HOLD_FRAMES, and a Select that took part in a chord never
+ * reaches the game at all. Outside gameplay (title, file select, the pause
+ * menu, where Select+A/B assigns soft slots) Select passes straight through. */
+enum { SEL_IDLE, SEL_PENDING, SEL_PASS, SEL_CHORD };
+#define SELECT_CHORD_HOLD_FRAMES 18 /* 0.3 s at 60 ticks */
+#define SELECT_CHORD_TAP_FRAMES 2   /* a held-back tap, replayed on release */
+static int sSelState = SEL_IDLE;
+static u32 sSelHeldFrames;
+static int sSelPulse;
+
+static bool SelectChord_InGameplay(void) {
+    return Port_Config_GetSelectStateChords() && gMain.task == TASK_GAME && !Port_SoftSlots_IsPauseActive();
+}
+
+/* True while Select is down in gameplay: X and Y belong to the chord then,
+ * not to the soft slots. */
+bool Port_SelectChord_Armed(void) {
+    return SelectChord_InGameplay() && Port_Config_InputPressed(PORT_INPUT_SELECT);
+}
+
+static bool SelectChord_HandleEvent(const SDL_Event* e) {
+    if (!Port_SelectChord_Armed())
+        return false;
+    if (Port_Config_EventIsInputDown(e, PORT_INPUT_SOFT_X)) {
+        Port_DebugMenu_OpenStatePicker(1);
+        sSelState = SEL_CHORD;
+        return true;
+    }
+    if (Port_Config_EventIsInputDown(e, PORT_INPUT_SOFT_Y)) {
+        Port_DebugMenu_OpenStatePicker(0);
+        sSelState = SEL_CHORD;
+        return true;
+    }
+    return false;
+}
+
+/* Decides, once per frame, whether this frame's Select reaches the game. */
+static void SelectChord_Filter(u16* keyinput) {
+    const bool held = !(*keyinput & SELECT_BUTTON);
+
+    if (!SelectChord_InGameplay()) {
+        sSelState = SEL_IDLE;
+        sSelPulse = 0;
+        return;
+    }
+    if (held) {
+        if (sSelState == SEL_IDLE) {
+            sSelState = SEL_PENDING;
+            sSelHeldFrames = 0;
+        }
+        if (sSelState == SEL_PENDING && ++sSelHeldFrames >= SELECT_CHORD_HOLD_FRAMES)
+            sSelState = SEL_PASS;
+        if (sSelState != SEL_PASS)
+            *keyinput |= SELECT_BUTTON;
+        return;
+    }
+    if (sSelState == SEL_PENDING)
+        sSelPulse = SELECT_CHORD_TAP_FRAMES;
+    sSelState = SEL_IDLE;
+    if (sSelPulse > 0) {
+        sSelPulse--;
+        *keyinput &= ~SELECT_BUTTON;
+    }
+}
+
 static void Port_UpdateInput(void) {
     Port_ApplyLanguage();
     u16 keyinput = 0x03FF;
@@ -142,6 +215,11 @@ static void Port_UpdateInput(void) {
              * ignore, and a stale flag would fire the frame the overlay closes. */
             Port_Config_ClearInputEdges();
             Port_SoftSlots_TickPause();
+            /* A chord's Select stays swallowed until it is let go; any other
+             * pending Select is dropped rather than replayed after the overlay. */
+            if (sSelState != SEL_CHORD)
+                sSelState = SEL_IDLE;
+            sSelPulse = 0;
             sFrameNum++;
             return;
         }
@@ -152,6 +230,8 @@ static void Port_UpdateInput(void) {
             keyinput &= ~sInputMap[i].gbaMask;
         }
     }
+
+    SelectChord_Filter(&keyinput);
 
     /* Soft-slots (X / Y / L2 / R2): when one is held with an item
      * assigned, force GBA B_BUTTON pressed so the engine spawns the
@@ -325,6 +405,8 @@ static void Port_PumpEvents(void) {
              * much as a control, and refusing to show a run's own states
              * would be a puzzle rather than a guard. Its actions are the
              * things that stay inert. */
+            if (SelectChord_HandleEvent(&e))
+                continue;
             if (Port_Config_EventIsInputDown(&e, PORT_INPUT_STATE_MENU_SAVE)) {
                 Port_DebugMenu_OpenStatePicker(1);
                 continue;

@@ -191,6 +191,10 @@ bool sMenuHintSeen = false;    /* set once the F8/settings menu is first opened 
 float sMasterVolume = 1.0f;    /* game master volume [0,1]; 1.0 = unchanged */
 bool sHoldAdvanceText = false; /* hold an advance key to keep paging text */
 bool sRollAttackMacroEnabled = true;
+/* Select + soft_x / soft_y open the save-state picker (save / load page) in
+ * gameplay, and a bare Select is held back until it is clearly not a chord.
+ * For pads with no spare buttons; see Port_SelectChord_* in port_bios.c. */
+bool sSelectStateChords = false;
 bool sFullscreen = false;
 bool sFullscreenHideCursor = true; /* hide the OS cursor while fullscreen */
 float sAnalogDeadzone = 0.30f;     /* 360° stick deadzone magnitude [0..0.95] */
@@ -324,6 +328,7 @@ const BoolCfg kBoolCfg[] = {
     { "menu_hint_seen", &sMenuHintSeen, false },
     { "hold_advance_text", &sHoldAdvanceText, false },
     { "roll_attack_macro", &sRollAttackMacroEnabled, true },
+    { "select_state_chords", &sSelectStateChords, false },
     { "fullscreen", &sFullscreen, false },
     { "fullscreen_hide_cursor", &sFullscreenHideCursor, true },
     { "rando_enabled", &sRandoEnabled, false },
@@ -2033,6 +2038,9 @@ extern "C" void Port_Config_SetHoldToAdvanceText(bool on) {
     sHoldAdvanceText = on;
     sConfigJson["hold_advance_text"] = on;
     SaveConfig();
+}
+extern "C" bool Port_Config_GetSelectStateChords(void) {
+    return sSelectStateChords;
 }
 extern "C" bool Port_Config_GetRollAttackMacroEnabled(void) {
     return sRollAttackMacroEnabled;

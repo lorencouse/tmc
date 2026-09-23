@@ -32,6 +32,9 @@ void Port_SoftSlots_Update(void);
  * input layer ORs B_BUTTON into KEYINPUT in this case so the engine sees
  * a regular B-press and routes it through CreateItemIfInputMatches. */
 bool Port_SoftSlots_IsBHeld(void);
+/* port_bios.c: Select is held in gameplay with select_state_chords on, so X/Y
+ * are picker chords rather than soft slots. */
+bool Port_SelectChord_Armed(void);
 int Port_SoftSlots_GetActiveSlot(void);
 
 /* Returns the soft-slot's item if a slot is active, else `saved`. Used by

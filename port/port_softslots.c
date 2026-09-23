@@ -84,7 +84,10 @@ void Port_SoftSlots_Update(void) {
     int newlyPressed = -1;
 
     for (int i = 0; i < PORT_SOFTSLOT_COUNT; i++) {
-        nowHeld[i] = Port_Config_SoftSlotPressed(i) && Port_SoftSlots_GetAssignment(i) != 0;
+        /* X and Y (slots 0, 1) are the Select-chord keys while Select is
+         * held in gameplay (port_bios.c); they must not also fire an item. */
+        nowHeld[i] = Port_Config_SoftSlotPressed(i) && !(i < 2 && Port_SelectChord_Armed()) &&
+                     Port_SoftSlots_GetAssignment(i) != 0;
         if (nowHeld[i] && !sPrevHeld[i]) {
             /* Later iterations overwrite, giving last-iterated == highest-
              * index newly-pressed slot priority. */

@@ -284,6 +284,7 @@ void Port_Config_SetMenuHintSeen(bool seen);
 bool Port_Config_GetHoldToAdvanceText(void);
 void Port_Config_SetHoldToAdvanceText(bool on);
 bool Port_Config_GetRollAttackMacroEnabled(void);
+bool Port_Config_GetSelectStateChords(void);
 void Port_Config_SetRollAttackMacroEnabled(bool on);
 float Port_Config_GetMasterVolume(void);
 void Port_Config_SetMasterVolume(float v);
