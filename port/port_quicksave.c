@@ -475,7 +475,10 @@ static void ThumbFilename(int slot, char* out, size_t cap) {
  * and renamed over the target, so a crash, a full card or a power cut during
  * an overwrite leaves the previous state intact instead of a truncated file.
  * Same pattern as WriteEepromAtomic in port_save.c; SDL_RenamePath replaces
- * an existing file on every platform. */
+ * an existing file on every platform. Autosaves skip the sync: they run on
+ * the game thread on every room change, and an fsync of a ~660 KB state to an
+ * SD card is a visible hitch. A power cut can then cost the newest ring slot,
+ * never the older ones. */
 static FILE* OpenAtomic(const char* path, char* tmp, size_t cap) {
     if ((size_t)snprintf(tmp, cap, "%s.tmp", path) >= cap) {
         errno = ENAMETOOLONG;
@@ -484,15 +487,18 @@ static FILE* OpenAtomic(const char* path, char* tmp, size_t cap) {
     return fopen(tmp, "wb");
 }
 
-/* Flushes, syncs and closes f, then renames tmp over path. On any failure tmp
- * is removed, path is untouched, errno is kept and 0 is returned. */
-static int CommitAtomic(FILE* f, const char* tmp, const char* path) {
+/* Flushes, syncs (when durable) and closes f, then renames tmp over path. On
+ * any failure tmp is removed, path is untouched, errno is kept and 0 is
+ * returned. */
+static int CommitAtomic(FILE* f, const char* tmp, const char* path, int durable) {
     int ok = fflush(f) == 0;
+    if (durable) {
 #ifdef _WIN32
-    ok = ok && _commit(_fileno(f)) == 0;
+        ok = ok && _commit(_fileno(f)) == 0;
 #else
-    ok = ok && fsync(fileno(f)) == 0;
+        ok = ok && fsync(fileno(f)) == 0;
 #endif
+    }
     if (fclose(f) != 0)
         ok = 0;
     if (ok && !SDL_RenamePath(tmp, path)) {
@@ -507,7 +513,7 @@ static int CommitAtomic(FILE* f, const char* tmp, const char* path) {
     return ok;
 }
 
-static void WriteThumbToDisk(int slot) {
+static void WriteThumbToDisk(int slot, int durable) {
     if (slot < 0 || slot >= NUM_SLOTS || !sThumbValid[slot])
         return;
     char path[80], tmp[88];
@@ -519,7 +525,7 @@ static void WriteThumbToDisk(int slot) {
     const u16 w = THUMB_W, h = THUMB_H;
     if (fwrite(&magic, sizeof(magic), 1, f) == 1 && fwrite(&w, sizeof(w), 1, f) == 1 &&
         fwrite(&h, sizeof(h), 1, f) == 1 && fwrite(sThumbs[slot], 1, THUMB_BYTES, f) == THUMB_BYTES) {
-        CommitAtomic(f, tmp, path);
+        CommitAtomic(f, tmp, path, durable);
     } else {
         fclose(f);
         remove(tmp);
@@ -547,7 +553,7 @@ static int ReadThumbFromDisk(int slot) {
     return ok;
 }
 
-static int WriteSlotToDisk(int slot) {
+static int WriteSlotToDisk(int slot, int durable) {
     if (slot < 0 || slot >= NUM_SLOTS)
         return 0;
     Slot* s = &sSlots[slot];
@@ -586,7 +592,7 @@ static int WriteSlotToDisk(int slot) {
         fclose(f);
         remove(tmp);
     }
-    if (written != s->bytes || !CommitAtomic(f, tmp, path)) {
+    if (written != s->bytes || !CommitAtomic(f, tmp, path, durable)) {
         const int err = errno;
         fprintf(stderr, "[quicksave] write %s failed (%zu/%zu): %s; the previous file is kept\n", path, written,
                 s->bytes, err ? strerror(err) : "unknown error");
@@ -671,7 +677,7 @@ static int ReadSlotFromDisk(int slot) {
  *   Public API
  * ============================================================ */
 
-int Port_QuickSave_SaveSlot(int slot) {
+static int SaveSlot(int slot, int durable) {
     if (slot < 0 || slot >= NUM_SLOTS)
         return 0;
     if (!Snapshot_Capture(&sSlots[slot]))
@@ -679,8 +685,8 @@ int Port_QuickSave_SaveSlot(int slot) {
     CaptureThumbnail(slot);
     /* Best-effort disk persistence — failure is non-fatal, the in-memory
      * snapshot still works for the session. */
-    WriteSlotToDisk(slot);
-    WriteThumbToDisk(slot);
+    WriteSlotToDisk(slot, durable);
+    WriteThumbToDisk(slot, durable);
     /* The files just changed under the probe cache; re-seed it rather than
      * invalidating, since we already know both answers. */
     sDiskProbed[slot] = 1;
@@ -689,6 +695,10 @@ int Port_QuickSave_SaveSlot(int slot) {
     sThumbProbed[slot] = 1;
     fprintf(stderr, "[quicksave] slot %d saved (%zu bytes)\n", slot, sSlots[slot].bytes);
     return 1;
+}
+
+int Port_QuickSave_SaveSlot(int slot) {
+    return SaveSlot(slot, 1);
 }
 
 int Port_QuickSave_LoadSlot(int slot) {
@@ -826,7 +836,7 @@ static void TakeAutoSnapshot(const char* reason) {
     if (sAutoNextSlot >= AUTO_SLOT_BASE + NUM_AUTO_SLOTS) {
         sAutoNextSlot = AUTO_SLOT_BASE;
     }
-    if (Port_QuickSave_SaveSlot(slot)) {
+    if (SaveSlot(slot, 0)) {
         fprintf(stderr, "[autosave] saved to ring slot %d (%s)\n", slot, reason);
     }
 }
