@@ -144,6 +144,10 @@ LINUX_DEPS = [
     ("nlohmann-json", lambda: pkg_config_ok("nlohmann_json"),   "nlohmann-json", "nlohmann-json3-dev"),
     ("libcurl",       lambda: pkg_config_ok("libcurl"),         "curl",          "libcurl4-openssl-dev"),
 ]
+# The PortMaster build compiles RetroAchievements out (xmake.lua), so it has
+# no use for libcurl.
+if os.environ.get("TMC_SDL3_SHARED") == "1":
+    LINUX_DEPS = [d for d in LINUX_DEPS if d[0] != "libcurl"]
 
 WIN_DEPS = [
     ("xmake", lambda: bool(shutil.which("xmake"))),
