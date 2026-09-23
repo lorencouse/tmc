@@ -80,6 +80,13 @@ namespace {
 constexpr uint32_t kPlayerCount = 32;
 constexpr uint32_t kMaxTracks = 16;
 constexpr uint32_t kSongCount = SFX_221 + 1;
+/* Music vs sound effects is decided by player, not by song: in gSongTable
+ * (src/sound.c) every real BGM_* song (ids 1..NUM_BGM) plays on
+ * MUSIC_PLAYER_BGM, the last of the 32 players, and no SFX does (the unused
+ * BGM slots sit on MUSIC_PLAYER_00 as silence). That is the same split the
+ * game makes itself in doPlaySound (IS_BGM -> volumeBgm, else volumeSfx), so
+ * jingles such as SFX_ITEM_GET (MUSIC_PLAYER_1E) count as sound effects. */
+constexpr uint32_t kBgmPlayerIndex = kPlayerCount - 1;
 
 struct BackendState {
     bool initialized = false;
@@ -114,6 +121,10 @@ struct BackendState {
     /* Game master volume [0,1] applied to the final mixed output (F8 -> Audio
      * "Master volume"). 1.0 = unchanged. */
     float masterVolume = 1.0f;
+    /* Per-category gains [0,1] (F8 -> Audio "Music" / "Sound effects"),
+     * folded into each track's gain before the master volume. */
+    float musicVolume = 1.0f;
+    float sfxVolume = 1.0f;
 };
 
 BackendState sState;
@@ -677,10 +688,14 @@ static void RenderChunkLocked(void) {
         for (uint32_t playerIndex = 0; playerIndex < playerCount; playerIndex++) {
             const auto& player = sState.ctx->players[playerIndex];
             const size_t trackCount = std::min<size_t>(kMaxTracks, player.tracks.size());
+            /* At 1.0 the extra multiply is exact, so the default mix is unchanged;
+             * at 0.0 the player's tracks are skipped below like muted ones. */
+            const float categoryVolume = playerIndex == kBgmPlayerIndex ? sState.musicVolume : sState.sfxVolume;
 
             for (size_t trackIndex = 0; trackIndex < trackCount; trackIndex++) {
                 const auto& track = player.tracks[trackIndex];
-                const float gain = static_cast<float>(sState.trackVolumes[playerIndex][trackIndex]) / 255.0f;
+                const float gain =
+                    static_cast<float>(sState.trackVolumes[playerIndex][trackIndex]) / 255.0f * categoryVolume;
 
                 if (track.muted || gain <= 0.0f) {
                     continue;
@@ -999,6 +1014,26 @@ void Port_M4A_Backend_SetMasterVolume(float volume) {
 float Port_M4A_Backend_GetMasterVolume(void) {
     std::lock_guard<std::mutex> lock(sStateMutex);
     return sState.masterVolume;
+}
+
+void Port_M4A_Backend_SetMusicVolume(float volume) {
+    std::lock_guard<std::mutex> lock(sStateMutex);
+    sState.musicVolume = volume < 0.0f ? 0.0f : (volume > 1.0f ? 1.0f : volume);
+}
+
+float Port_M4A_Backend_GetMusicVolume(void) {
+    std::lock_guard<std::mutex> lock(sStateMutex);
+    return sState.musicVolume;
+}
+
+void Port_M4A_Backend_SetSfxVolume(float volume) {
+    std::lock_guard<std::mutex> lock(sStateMutex);
+    sState.sfxVolume = volume < 0.0f ? 0.0f : (volume > 1.0f ? 1.0f : volume);
+}
+
+float Port_M4A_Backend_GetSfxVolume(void) {
+    std::lock_guard<std::mutex> lock(sStateMutex);
+    return sState.sfxVolume;
 }
 
 void Port_M4A_Backend_SetGbaAccurate(bool accurate) {

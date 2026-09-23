@@ -475,3 +475,19 @@ void Port_Audio_SetMasterVolume(float volume) {
 float Port_Audio_GetMasterVolume(void) {
     return Port_M4A_Backend_GetMasterVolume();
 }
+
+void Port_Audio_SetMusicVolume(float volume) {
+    Port_M4A_Backend_SetMusicVolume(volume);
+}
+
+float Port_Audio_GetMusicVolume(void) {
+    return Port_M4A_Backend_GetMusicVolume();
+}
+
+void Port_Audio_SetSfxVolume(float volume) {
+    Port_M4A_Backend_SetSfxVolume(volume);
+}
+
+float Port_Audio_GetSfxVolume(void) {
+    return Port_M4A_Backend_GetSfxVolume();
+}

@@ -289,6 +289,10 @@ bool Port_Config_GetSelectStateChords(void);
 void Port_Config_SetRollAttackMacroEnabled(bool on);
 float Port_Config_GetMasterVolume(void);
 void Port_Config_SetMasterVolume(float v);
+float Port_Config_GetMusicVolume(void);
+void Port_Config_SetMusicVolume(float v);
+float Port_Config_GetSfxVolume(void);
+void Port_Config_SetSfxVolume(float v);
 bool Port_Config_GetFullscreen(void);
 void Port_Config_SetFullscreen(bool on);
 /* Hide the OS mouse cursor while the window is fullscreen (default on). When

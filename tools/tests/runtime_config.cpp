@@ -30,6 +30,13 @@ int main(int argc, char** argv) {
     assert(Port_Config_FrameTimeNs() == 0);
     assert(Port_Config_GetPracticeSlowmo() == 0.5f);
     assert(Port_Config_GetMasterVolume() == 1.0f);
+    assert(Port_Config_GetMusicVolume() == 1.0f && Port_Config_GetSfxVolume() == 1.0f);
+    load(path, R"({"music_volume":0.25,"sfx_volume":"bad"})");
+    assert(Port_Config_GetMusicVolume() == 0.25f && Port_Config_GetSfxVolume() == 1.0f);
+    Port_Config_SetMusicVolume(2);
+    Port_Config_SetSfxVolume(0.5f);
+    Port_Config_Load(path); // the setters persisted: reload reads them back
+    assert(Port_Config_GetMusicVolume() == 1.0f && Port_Config_GetSfxVolume() == 0.5f);
     load(path, R"({"reborn_features":4294967297})");
     assert(Port_Config_GetRebornMask() == 0);
     load(path, R"({"reborn_features":-1})");

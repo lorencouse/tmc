@@ -45,6 +45,12 @@ void Port_M4A_Backend_SetReverbLevel(int level);
 int Port_M4A_Backend_GetReverbLevel(void);
 void Port_M4A_Backend_SetMasterVolume(float volume);
 float Port_M4A_Backend_GetMasterVolume(void);
+/* Music (the BGM player) and sound-effect (every other player) gains [0,1],
+ * applied per track underneath the master volume. */
+void Port_M4A_Backend_SetMusicVolume(float volume);
+float Port_M4A_Backend_GetMusicVolume(void);
+void Port_M4A_Backend_SetSfxVolume(float volume);
+float Port_M4A_Backend_GetSfxVolume(void);
 
 #ifdef __cplusplus
 }
