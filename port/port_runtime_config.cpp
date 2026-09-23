@@ -15,6 +15,11 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -441,9 +446,41 @@ void LoadBinds(PortInput input, const nlohmann::json& v) {
     }
 }
 
+/* Write config.json atomically: a sibling temp file, flushed to disk, renamed
+ * over the target. A plain truncating write cut short by a crash, a full card
+ * or a kill -9 left an empty or half-written config, which the next load
+ * replaced with the built-in defaults. Same pattern as WriteEepromAtomic. */
+static void WriteConfigAtomic(const std::filesystem::path& path, const nlohmann::json& j) {
+    const std::string text = j.dump(4) + '\n';
+    std::filesystem::path tmp = path;
+    tmp += ".tmp";
+
+    FILE* f = fopen(tmp.string().c_str(), "wb");
+    if (!f) {
+        fprintf(stderr, "[CONFIG] cannot write %s\n", tmp.string().c_str());
+        return;
+    }
+    bool ok = fwrite(text.data(), 1, text.size(), f) == text.size() && fflush(f) == 0;
+#ifdef _WIN32
+    ok = ok && _commit(_fileno(f)) == 0;
+#else
+    ok = ok && fsync(fileno(f)) == 0;
+#endif
+    if (fclose(f) != 0)
+        ok = false;
+
+    std::error_code ec;
+    if (ok)
+        std::filesystem::rename(tmp, path, ec);
+    if (!ok || ec) {
+        fprintf(stderr, "[CONFIG] saving %s failed; the previous file is kept\n", path.string().c_str());
+        std::filesystem::remove(tmp, ec);
+    }
+}
+
 void SaveConfig(void) {
     try {
-        std::ofstream(sConfigPath) << sConfigJson.dump(4) << '\n';
+        WriteConfigAtomic(sConfigPath, sConfigJson);
     } catch (...) {}
 }
 
@@ -710,7 +747,7 @@ extern "C" void Port_Config_Load(const char* path) {
             j = DefaultsJson();
         }
     } else {
-        std::ofstream(p) << j.dump(4) << '\n';
+        WriteConfigAtomic(p, j);
     }
 
     sConfigJson = j;
