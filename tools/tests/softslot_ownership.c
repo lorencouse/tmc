@@ -3,6 +3,8 @@
 static unsigned owned[256];
 unsigned int GetInventoryValue(unsigned int item) { assert(item < 256); return owned[item]; }
 bool Port_Config_SoftSlotPressed(int slot) { return slot == 0; }
+static bool chordArmed;
+bool Port_SelectChord_Armed(void) { return chordArmed; }
 int main(void) {
     sLoaded = true;
     sAssignments[0] = 17; /* Previously assigned Gust Jar in another save. */
@@ -15,6 +17,13 @@ int main(void) {
     assert(Port_SoftSlots_IsBHeld());
     assert(Port_SoftSlots_GetEffectiveBItem(1) == 17);
     assert(Port_SoftSlots_GetAssignment(0) == 17);
+    /* Select held: X belongs to the Select+X chord, not the soft slot. */
+    chordArmed = true;
+    Port_SoftSlots_Update();
+    assert(!Port_SoftSlots_IsBHeld());
+    chordArmed = false;
+    Port_SoftSlots_Update();
+    assert(Port_SoftSlots_IsBHeld());
     /* Ownership can change after input polling, e.g. loading another slot. */
     owned[17] = 0;
     assert(Port_SoftSlots_GetEffectiveBItem(1) == 1);

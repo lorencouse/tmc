@@ -19,8 +19,9 @@ typedef uint32_t u32;
 #define TRUE 1
 #define FALSE 0
 struct { int scroll_x, scroll_y, origin_x, origin_y; } gRoomControls;
-static int width;
+static int width, height = 160;
 int Port_Widescreen_EffectiveViewWidth(void) { return width; }
+int Port_Widescreen_EffectiveViewHeight(void) { return height; }
 '''
 harness += source[start:end]
 harness += r'''
@@ -43,6 +44,10 @@ int main(void) {
         assert(CheckRegionOnScreen(0,291,32,32));
         assert(!CheckRegionOnScreen(8,409,32,32));
     }
+    /* Tall (zoomed-out) view: the region 161 lines below is now in view. */
+    height = 240;
+    assert(CheckRegionOnScreen(8,409,32,32));
+    assert(!CheckRegionOnScreen(8,489,32,32));
     return 0;
 }
 '''
