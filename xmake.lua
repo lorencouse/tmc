@@ -1,6 +1,6 @@
 set_project("tmc")
 -- Keep in sync with port/port_version.h.
-local TMC_PC_VERSION = "0.8.3"
+local TMC_PC_VERSION = "0.9.3"
 set_version(TMC_PC_VERSION)
 set_xmakever("2.7.0")
 
@@ -77,20 +77,22 @@ option("gpu_renderer")
     set_description("Compile the SDL_GPU presentation path (default ON; auto-falls back to SDL_Renderer).")
 option_end()
 
--- Widescreen: render the GBA frame at a non-native horizontal width by
--- overriding MODE1_GBA_WIDTH at compile time.
---   240: GBA-native (3:2). No widescreen, no pillarbox, no stretch.
---   >240: ViruaPPU pillarboxes BG/OAM at col 240 (the engine's 32-tile
---         BG buffer holds reliable tile data only in cols 0..29, plus
---         parked off-screen sprites at x>=240). port_ppu.cpp uniformly
---         stretches the 240-px frame to fill the wider window. Real
---         widescreen needs a 64-tile sa2-style BGCNT_TXT512x256 engine
---         extension — Phase 2.
--- Default 240 = clean, no artifacts.
+-- RetroAchievements (rcheevos + libcurl). Compiles the vendored MIT
+-- rcheevos client (libs/rcheevos) plus the port's RA glue
+-- (port/port_ra*.c, port/port_gba_shadow.c). Needs libcurl for HTTPS.
+option("ra")
+    set_default(true)
+    set_showmenu(true)
+    set_description("Compile RetroAchievements support (rcheevos + libcurl; default ON)")
+option_end()
+
+-- Framebuffer capacity. At >240, the WIP runtime option reveals room-backed
+-- tiles at a width fitted to the window aspect and capped by the room.
+-- Fixed canvases and the digging-cave iris use the native 240px view.
 option("widescreen_width")
     set_default(240)
     set_showmenu(true)
-    set_description("MODE1_GBA_WIDTH (240=native, >240=stretched until Phase 2)")
+    set_description("Framebuffer width capacity (240=native, >240 enables true widescreen)")
 option_end()
 
 -- Build directories
@@ -221,6 +223,28 @@ elseif is_plat("android") then
 else
     add_requires("libpng", {system = true, optional = true})
     add_requires("zlib",   {system = true, optional = true})
+end
+
+-- libcurl backs the RetroAchievements HTTPS worker (port_ra_net.c).
+-- xmake's default lookup uses the system libcurl when present (Linux/macOS)
+-- and otherwise builds the package from source (MinGW/Windows, or a Linux
+-- box without libcurl-dev). The Android NDK has no system curl and a source
+-- build would drag in a whole TLS stack, so RA is simply compiled out there
+-- instead of failing the target.
+local ra_enabled = has_config("ra")
+if ra_enabled and is_plat("android") then
+    ra_enabled = false
+    print("PC port: RetroAchievements disabled on Android (no libcurl in the NDK).")
+end
+-- The PortMaster build (TMC_SDL3_SHARED=1) must need nothing past libc, libm,
+-- libdl, libgcc_s and libpthread; handheld firmwares do not reliably ship
+-- libcurl, and the ABI gate rejects it.
+if ra_enabled and is_plat("linux") and os.getenv("TMC_SDL3_SHARED") == "1" then
+    ra_enabled = false
+    print("PC port: RetroAchievements disabled for the PortMaster build (no libcurl dependency).")
+end
+if ra_enabled then
+    add_requires("libcurl")
 end
 
 -- Global -mno-ms-bitfields on MinGW so the entire codebase matches the
@@ -706,6 +730,7 @@ target("tmc_pc")
     add_files("port/port_runtime_config.cpp")
     add_files("port/port_debug_menu.cpp")
     add_files("port/port_imgui_menu.cpp")
+    add_files("port/port_level_editor.cpp")
     add_files("port/port_prelaunch_logo.cpp")
     add_files("port/port_tts.cpp")
     add_files("port/port_a11y_cues.c")     -- accessibility audio cues (surroundings scan, F10)
@@ -718,6 +743,7 @@ target("tmc_pc")
     add_rules("utils.bin2c", {extensions = {".png"}})
     add_files("docs/picori-logo.png", {rule = "utils.bin2c", nozeroend = true})
     add_files("port/port_debug_actions.c")
+    add_files("port/port_flag_names.cpp")
     add_files("port/port_debug_entities.c")
     add_files("port/port_debug_memory_watch.c")  -- live GBA memory-watch list (F8 Memory tab)
     add_files("port/port_quicksave.c")
@@ -802,9 +828,35 @@ target("tmc_pc")
         -- GLES compute backend: embed the shared core GLSL (built at runtime).
         add_files("port/shaders/ppu_core.glsl")
     end
+
+    -- RetroAchievements: vendored rcheevos (MIT, libs/rcheevos — libretro and
+    -- RAIntegration backends stripped; the remaining sources need no Lua and
+    -- no zlib) plus the port glue. Compiled out entirely at --ra=n.
+    if ra_enabled then
+        -- RC_CLIENT_SUPPORTS_HASH: exposes rc_client_begin_identify_and_load_game
+        -- + the rhash MD5 path, which is how the loaded ROM buffer gets
+        -- identified. Must be visible to rc_client.c AND port_ra.c, hence
+        -- target-wide.
+        add_defines("TMC_RA", "RC_CLIENT_SUPPORTS_HASH")
+        add_includedirs("libs/rcheevos/include", "libs/rcheevos/src")
+        -- rcheevos uses strdup/strcasecmp, which -std=c11 hides behind a
+        -- feature macro. Scoped to these files so the engine's TUs keep the
+        -- strict-C11 namespace they compile under today.
+        local rc_flags = { defines = "_DEFAULT_SOURCE" }
+        add_files("libs/rcheevos/src/*.c", rc_flags)
+        add_files("libs/rcheevos/src/rcheevos/*.c", rc_flags)
+        add_files("libs/rcheevos/src/rapi/*.c", rc_flags)
+        add_files("libs/rcheevos/src/rhash/*.c", rc_flags)
+        add_files("port/port_ra.c")          -- rc_client host: login, game load, frame tick
+        add_files("port/port_gba_shadow.c")  -- native globals -> GBA-addressed shadow
+        add_files("port/port_ra_net.c")      -- async HTTPS worker (libcurl)
+        add_files("port/port_ra_ui.cpp")     -- ImGui achievement list + toasts
+        add_packages("libcurl")
+    end
     add_files("port/port_icon.cpp")     -- SDL window icon (placeholder, ROM-extracted in future)
     add_files("port/port_mods.cpp")     -- Tier 1 mod loader: asset overrides from <exe>/mods/
     add_files("port/port_rom.c")        -- ROM loading & symbol resolution
+    add_files("port/port_region_data.c") -- Compiled USA blobs -> EU/JP ROM counterparts
         -- PC port stubs for undefined symbols
     add_files("port/port_stubs.c")
     add_files("port/stubs_autogen.c")
@@ -1188,6 +1240,7 @@ target("ppu_gpu_parity")
     set_kind("binary")
     set_languages("c11", "cxx17")
     set_targetdir("build/pc")
+    add_defines("MODE1_GBA_WIDTH=" .. (get_config("widescreen_width") or 240))
     add_includedirs("port")
     add_includedirs("port/ppu/include")
     add_files("tools/ppu_gpu_parity.cpp")

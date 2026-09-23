@@ -52,7 +52,9 @@ extern void UpdateScreenShake(void);
 void sub_080790E4(Entity* this);
 void sub_08079064(Entity*);
 
-extern u8 gMapData[];
+#ifndef PC_PORT
+extern u8 gMapData[]; /* PC: u8* declared in port_rom.h */
+#endif
 extern const u8 gUnk_0800851C[];
 extern const u8 gUnk_080084BC[];
 extern const u8 gUnk_0800845C[];
@@ -200,9 +202,7 @@ extern u32 sub_08004202(Entity*, u8*, u32);
 
 // This just reuses the first 12 bytes of gUnk_02022830 to store a MapDataDefinition there temporarily.
 extern u16 gUnk_02022830[];
-#ifdef PC_PORT
-extern u8 gUnk_0800823C[];
-#else
+#ifndef PC_PORT
 extern u16* gUnk_0800823C[];
 #endif
 
@@ -3005,11 +3005,7 @@ void sub_0807A750(u32 param_1, u32 param_2, const u8* param_3, u32 param_4) {
             }
         }
 #ifdef PC_PORT
-        {
-            u32 gbaAddr;
-            memcpy(&gbaAddr, &gUnk_0800823C[uVar2 * 4], sizeof(gbaAddr));
-            ptr = (const u16*)port_resolve_addr((uintptr_t)gbaAddr);
-        }
+        ptr = Port_GetCollisionShapeData(uVar2);
 #else
         ptr = gUnk_0800823C[uVar2];
 #endif
@@ -3907,7 +3903,19 @@ void CreateCollisionDataBorderAroundRoom(void) {
 bool32 sub_0807BD14(Entity* this, u32 scrollDirection) {
     u32 room = sub_0807BEEC(this->x.HALF.HI, this->y.HALF.HI, scrollDirection);
     if (room != 0xff) {
+#if defined(PC_PORT) && MODE1_GBA_WIDTH > 240
+        extern int Port_Widescreen_EffectiveViewWidth(void);
+        const int wasWide = Port_Widescreen_EffectiveViewWidth() > 240;
+#endif
         gRoomControls.scrollAction = 2;
+#if defined(PC_PORT) && MODE1_GBA_WIDTH > 240
+        /* Rolling VRAM transitions carry only 240 pixels. Reframe against
+         * the departing room before its bounds/map are replaced below.
+         * Scroll2Sub0 then fills the native outgoing tilemap. */
+        if (wasWide) {
+            sub_080809D4();
+        }
+#endif
         gRoomControls.scrollSubAction = 0;
         gRoomControls.reload_flags = 1;
         gRoomControls.room = room;
@@ -4208,6 +4216,10 @@ void LoadRoomGfx(void) {
             }
             break;
     }
+#ifdef PC_PORT
+    extern void Port_LevelEditor_OnRoomLoad(void);
+    Port_LevelEditor_OnRoomLoad();
+#endif
 }
 
 void sub_0807C460(void) {
@@ -4450,13 +4462,22 @@ void InitializeCamera() {
     roomControls = &gRoomControls;
     target = gRoomControls.camera_target;
     if (target != NULL) {
+#ifdef PC_PORT
+        /* u16 * 0x10000 overflows int (signed UB); test the preserved-axis bit directly. */
+        if (target->x.HALF_U.HI & 0x8000) {
+#else
         if ((target->x.HALF_U.HI * 0x10000) < 0) {
+#endif
             tmp1 = (target->x.HALF.HI & 0x7fff);
             tmp1 -= gRoomControls.origin_x;
             target->x.HALF.HI = tmp1;
         }
         targetX = target->x.HALF.HI;
+#ifdef PC_PORT
+        if (target->y.HALF_U.HI & 0x8000) {
+#else
         if ((target->y.HALF_U.HI * 0x10000) < 0) {
+#endif
             tmp2 = (target->y.HALF.HI & 0x7fff);
             tmp2 -= gRoomControls.origin_y;
             target->y.HALF.HI = tmp2;

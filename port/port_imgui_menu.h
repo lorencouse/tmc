@@ -12,6 +12,7 @@ void Port_ImGui_Shutdown(void);
 
 bool Port_ImGui_CanPresent(void);
 bool Port_ImGui_WantsTextInput(void);
+bool Port_ImGui_WantsMouse(void);
 void Port_ImGui_HandleEvent(const SDL_Event* event);
 
 /* True when the settings menu draws its console/handheld shell (one

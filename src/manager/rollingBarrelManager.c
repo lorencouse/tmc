@@ -24,20 +24,6 @@ extern u8 gUpdateVisibleTiles;
 extern u32 gUsedPalettes;
 
 void RollingBarrelManager_OnEnterRoom(void);
-#ifdef PC_PORT
-extern void DisableVBlankDMA(void);
-static void RollingBarrelManager_OnExitRoom(void* this) {
-    /* Pairs with the per-frame SetVBlankDMA at line ~47 that writes
-     * BG2PA per-HBlank.  The manager registers no exit handler in
-     * vanilla, so on leaving Deepwood Shrine's rolling-barrel room
-     * the HDMA keeps firing into BG2PA in the next room — visible
-     * BG2 affine glitch when entering subsequent areas without a
-     * pause-menu open in between (which would mask the issue by
-     * overwriting the DMA src/dest).  Same fix class as #103. */
-    (void)this;
-    DisableVBlankDMA();
-}
-#endif
 void sub_08058BC8(RollingBarrelManager*);
 void sub_08058CB0(RollingBarrelManager*);
 void sub_08058CFC(void);
@@ -67,11 +53,7 @@ void RollingBarrelManager_Init(RollingBarrelManager* this) {
     this->unk_28 = 0x1234;
     super->timer = CheckLocalFlagsB(0x15, 0x2) != 0;
     sub_08058CB0(this);
-#ifdef PC_PORT
-    RegisterTransitionHandler(this, RollingBarrelManager_OnEnterRoom, RollingBarrelManager_OnExitRoom);
-#else
     RegisterTransitionHandler(this, RollingBarrelManager_OnEnterRoom, NULL);
-#endif
 }
 
 void RollingBarrelManager_Action1(RollingBarrelManager* this) {
@@ -154,19 +136,9 @@ void sub_08058A04(RollingBarrelManager* this) {
 
     s32 tmp = gPlayerEntity.base.x.HALF.HI - gRoomControls.origin_x;
     s32 tmp2 = gPlayerEntity.base.y.HALF.HI - gRoomControls.origin_y;
-    /* GBA-original trigger gates by barrel angle (unk_20 in 0x118..0x124)
-     * because the cobweb-hole physically rotates with the barrel. On the
-     * port, players struggle to land the angle (60Hz frame timing + 13-
-     * step window + barrel rest at 0xF0 right before the trigger).
-     * Drop the angle gate entirely on PC — once the cobweb is removed
-     * and the player is standing in the hole position with z=0, fall.
-     * Reasonable: the player has walked to the visible exit. */
-    bool32 angleOk;
-#ifdef PC_PORT
-    angleOk = TRUE;
-#else
-    angleOk = (this->unk_20 - 0x118 < 0xDu);
-#endif
+    /* The hole rotates with the barrel: only fall when it lines up with
+     * the player's position, matching the original GBA angle window. */
+    bool32 angleOk = (this->unk_20 - 0x118 < 0xDu);
     if (angleOk && CheckGlobalFlag(LV1TARU_OPEN) && (tmp - 0x6d < 0x17u) && (tmp2 - 0x45 < 0x17u) &&
         (gPlayerEntity.base.z.HALF.HI == 0)) {
         gPlayerState.queued_action = PLAYER_FALL;
@@ -250,7 +222,7 @@ void sub_08058BC8(RollingBarrelManager* this) {
     } while (++tmp3 < 0xA0u);
 #ifdef PC_PORT
     /* On GBA, gUnk_02017BA0 lives at gUnk_02017AA0 + 0x100 in EWRAM
-     * (documented in port_linked_stubs.c:70) — i.e. 0x10 BgAffineDstData
+     * (see the note in port_linked_stubs.c) — i.e. 0x10 BgAffineDstData
      * entries forward in the SAME buffer that the write loop above just
      * filled. On PC the two arrays are separate host allocations, so
      * gUnk_02017BA0 was never written and reading from it gives zeros,

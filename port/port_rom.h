@@ -1,12 +1,22 @@
 #pragma once
 #include <string.h>
 #include "port_types.h"
+#include "port_config.h"
 #include "structures.h"
 #include "map.h"
 
 // ROM data buffer
 extern u8* gRomData;
 extern u32 gRomSize;
+
+/* gMapData — the ~14 MB map/asset blob (gAreaRoomMap_None on GBA). Immutable
+ * ROM content, so on PC it is a pointer into gRomData set by Port_LoadRom()
+ * rather than a second copy. Readers only do gMapData + offset. */
+#ifdef TMC_N64
+extern u8 gMapData[];
+#else
+extern u8* gMapData;
+#endif
 
 #ifdef PC_PORT
 /*
@@ -75,7 +85,25 @@ void Port_PrintRomAccessSummary(void);
  * resolves ROM data pointers to native, and returns NULL for GBA Thumb function
  * pointers (bit 0 set) which can't be called on PC.
  */
+const u16* Port_GetCollisionShapeData(u32 index);
+u16 Port_GetTileTypeProperty(u32 tileType);
+void* Port_GetFuserFusionData(u32 fuserId);
+void* Port_GetLilypadRail(u32 index);
+u64 Port_GetEntityFuserData(u32 kind, u8 id, u8 type, u8 type2);
+
 void* Port_ReadPackedRomPtr(const void* base, u32 index);
+
+/* ---- Active-ROM table accessors (region-selected via gRomOffsets) ----
+ * All fail closed: NULL / 0 when the region has no offset or bounds fail. */
+u32 Port_RemapSpriteIndex(u32 usaIndex);   /* EU: idx > 288 → idx-1 (USA enum → EU-native) */
+u32 Port_FrameObjCountForRegion(void);     /* 512 USA/JP, 511 EU */
+u32 Port_FrameObjListsSizeForRegion(void); /* bytes: 200045 USA/JP, 199561 EU */
+u32 Port_FixedTypeGfxCountForRegion(void); /* 526 USA/JP, 525 EU */
+/* Entry `index` of a packed u32 GBA-pointer table at ROM offset `romOffset`,
+ * resolved into gRomData. Does NOT clear bit 0 (fuser records may be odd). */
+const u8* Port_ReadActiveRomPtrTable(u32 romOffset, u32 index);
+const u16* Port_GetFusionTextData(u32 fuserId);  /* gUnk_08001A7C[fuserId] */
+u64 Port_FindEntityFuserData(u32 isNpc, u8 id, u8 type, u8 type2); /* textId << 32 | fuserId, 0 = none */
 
 /**
  * Resolve a GBA ROM data address to a native PC pointer.
@@ -115,12 +143,14 @@ static inline void* Port_ResolveScript(u32 gba_addr) {
  * of the loaded ROM — spritePtr is already region-native and translating it
  * MIS-translates whenever a native EU/JP address collides with a different
  * script's USA key (30 EU / 5 JP known collisions). Discriminate by where the
- * EntityData record itself lives.
+ * EntityData record itself lives, including registered copies of ROM lists.
  */
+int Port_IsCopiedRomEntityData(const void* entityData);
+
 static inline void* Port_ResolveEntityScript(const void* entityData, u32 spritePtr) {
     uintptr_t p = (uintptr_t)entityData;
     uintptr_t base = (uintptr_t)gRomData;
-    if (gRomData && p >= base && p < base + gRomSize)
+    if ((gRomData && p >= base && p - base < gRomSize) || Port_IsCopiedRomEntityData(entityData))
         return Port_ResolveRomData(spritePtr); /* ROM-native: no translation */
     return Port_ResolveScript(spritePtr);      /* compiled blob: USA-baseline */
 }

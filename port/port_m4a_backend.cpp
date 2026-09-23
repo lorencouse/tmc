@@ -86,7 +86,6 @@ struct BackendState {
     bool vsyncEnabled = true;
     uint32_t sampleRate = 48000;
     uint32_t soundMode = 0;
-    bool songMapLoaded = false;
     std::unique_ptr<Rom> rom;
     std::unique_ptr<MP2KContext> ctx;
     std::vector<int16_t> pendingSamples;
@@ -149,6 +148,12 @@ struct M4ACommand {
 };
 std::vector<M4ACommand> sCmdQueue;
 std::mutex sCmdMutex;
+
+/* Construct callback scratch buffers before main so their destructors run
+ * after the audio shutdown handler registered there stops the SDL callback. */
+std::vector<float> sMixAccL;
+std::vector<float> sMixAccR;
+std::vector<M4ACommand> sDrainedCommands;
 
 static void PushCommand(const M4ACommand& c) {
     std::lock_guard<std::mutex> lock(sCmdMutex);
@@ -293,7 +298,6 @@ static std::string LoadSoundsJson(void) {
 
 static bool ParseIntAfterKey(const std::string& text, size_t keyPos, long long& outValue) {
     size_t pos = text.find(':', keyPos);
-    size_t end = 0;
 
     if (pos == std::string::npos) {
         return false;
@@ -304,12 +308,13 @@ static bool ParseIntAfterKey(const std::string& text, size_t keyPos, long long& 
         pos++;
     }
 
-    outValue = std::strtoll(text.c_str() + pos, nullptr, 10);
-    end = pos;
-    if (end >= text.size() || (!std::isdigit(static_cast<unsigned char>(text[end])) && text[end] != '-')) {
+    /* Validate before writing: callers rely on their sentinel surviving a
+     * failed parse (e.g. startOffset stays -1 so the entry is rejected). */
+    if (pos >= text.size() || (!std::isdigit(static_cast<unsigned char>(text[pos])) && text[pos] != '-')) {
         return false;
     }
 
+    outValue = std::strtoll(text.c_str() + pos, nullptr, 10);
     return true;
 }
 
@@ -361,29 +366,48 @@ static bool ObjectMatchesVariant(const std::string& objectText, const char* vari
     return objectText.find(std::string("\"") + variantName + "\"", variantsPos) != std::string::npos;
 }
 
-static void LoadSongMapLocked(void) {
-    std::string jsonText;
+/* Resolves the "offsets" rebase that applies to the entry starting at
+ * `objectStart`. sounds.json is a flat array in which `{"offsets": {...}}`
+ * objects appear REPEATEDLY and POSITIONALLY — each one re-bases every entry
+ * that follows it for the variants it names. The nearest preceding block
+ * containing the active variant wins; EU-only updates must preserve JP's
+ * earlier offset. The variant lookup is bounded to that block's map: an
+ * unbounded search would run past a block that lacks the variant and parse
+ * whatever key came next. */
+static long long VariantOffsetForEntry(const std::string& jsonText, size_t objectStart, const char* variantName) {
+    size_t offsetsPos = jsonText.rfind("\"offsets\"", objectStart);
+    while (offsetsPos != std::string::npos) {
+        size_t mapStart = jsonText.find('{', offsetsPos);
+        if (mapStart == std::string::npos) {
+            return 0;
+        }
+        size_t mapEnd = FindObjectEnd(jsonText, mapStart);
+        if (mapEnd == std::string::npos) {
+            return 0;
+        }
+        size_t variantPos = jsonText.find(std::string("\"") + variantName + "\"", mapStart);
+        if (variantPos != std::string::npos && variantPos < mapEnd) {
+            long long value = 0;
+            ParseIntAfterKey(jsonText, variantPos, value);
+            return value;
+        }
+        if (offsetsPos == 0) {
+            break;
+        }
+        offsetsPos = jsonText.rfind("\"offsets\"", offsetsPos - 1);
+    }
+    return 0;
+}
+
+/* Pure: parses `jsonText` into `outOffsets` and touches no shared state, so it
+ * runs with no lock held. Both halves are far too slow for the mutex the SDL
+ * audio callback takes every buffer — reading sounds.json hits the disk and
+ * the scan walks the whole 100 KB document once per entry. */
+static void ParseSongMap(const std::string& jsonText, std::array<size_t, kSongCount>& outOffsets) {
     const char* variantName = GetCurrentVariantName();
-    long long variantOffset = 0;
     size_t searchPos = 0;
 
-    sState.songHeaderOffsets.fill(0);
-    sState.songMapLoaded = true;
-
-    jsonText = LoadSoundsJson();
-    if (jsonText.empty()) {
-        return;
-    }
-
-    {
-        size_t offsetsPos = jsonText.find("\"offsets\"");
-        if (offsetsPos != std::string::npos) {
-            size_t variantPos = jsonText.find(std::string("\"") + variantName + "\"", offsetsPos);
-            if (variantPos != std::string::npos) {
-                ParseIntAfterKey(jsonText, variantPos, variantOffset);
-            }
-        }
-    }
+    outOffsets.fill(0);
 
     while (true) {
         size_t pathPos = jsonText.find("\"path\": \"sounds/", searchPos);
@@ -423,15 +447,27 @@ static void LoadSongMapLocked(void) {
         {
             size_t startsPos = objectText.find("\"starts\"");
             if (startsPos != std::string::npos) {
-                size_t variantPos = objectText.find(std::string("\"") + variantName + "\"", startsPos);
-                if (variantPos != std::string::npos) {
-                    ParseIntAfterKey(objectText, variantPos, startOffset);
+                /* Bound the variant lookup to the "starts" map for the same
+                 * reason as above, and reject the entry if it yields nothing
+                 * usable — startOffset must stay negative so the guard below
+                 * drops it rather than registering the song at ROM pos 0. */
+                size_t mapStart = objectText.find('{', startsPos);
+                size_t mapEnd = std::string::npos;
+                size_t variantPos = std::string::npos;
+
+                if (mapStart != std::string::npos) {
+                    mapEnd = FindObjectEnd(objectText, mapStart);
+                    variantPos = objectText.find(std::string("\"") + variantName + "\"", mapStart);
+                }
+                if (mapEnd == std::string::npos || variantPos == std::string::npos || variantPos > mapEnd ||
+                    !ParseIntAfterKey(objectText, variantPos, startOffset)) {
+                    continue;
                 }
             } else {
                 size_t startPos = objectText.find("\"start\"");
                 if (startPos != std::string::npos) {
                     if (ParseIntAfterKey(objectText, startPos, startOffset)) {
-                        startOffset += variantOffset;
+                        startOffset += VariantOffsetForEntry(jsonText, objectStart, variantName);
                     }
                 }
             }
@@ -452,7 +488,7 @@ static void LoadSongMapLocked(void) {
             const char* songLabel = Port_GetSongLabel((uint16_t)i);
 
             if (songLabel != nullptr && label == songLabel) {
-                sState.songHeaderOffsets[i] = static_cast<size_t>(startOffset + headerOffset);
+                outOffsets[i] = static_cast<size_t>(startOffset + headerOffset);
                 break;
             }
         }
@@ -460,10 +496,6 @@ static void LoadSongMapLocked(void) {
 }
 
 static size_t SongIdToRomPosLocked(uint16_t songId) {
-    if (!sState.songMapLoaded) {
-        LoadSongMapLocked();
-    }
-
     if (songId >= kSongCount) {
         return 0;
     }
@@ -508,47 +540,69 @@ static void AudioGuardWarn(const char* where, const char* what) {
     }
 }
 
-static void RebuildContextLocked(void) {
-    std::span<uint8_t> romSpan;
-    SongTableInfo songTableInfo;
+/* Builds the replacement Rom/MP2KContext with NO lock held: a 32-player
+ * context allocates a ReverbEffect per track per player, which is far too long
+ * to make the audio callback wait. Only the pointer swap is locked, and the
+ * outgoing context is destroyed after the lock is released. */
+static void RebuildContext(void) {
+    std::unique_ptr<Rom> rom;
+    std::unique_ptr<MP2KContext> ctx;
+    uint32_t sampleRate;
+    uint32_t soundMode;
+    AgbplaySoundMode agbplayMode;
+    bool initialized;
 
-    /* Drop any commands queued against the OLD context — the engine re-issues
-     * the room BGM after a reset, so a stale start/volume must not leak onto the
-     * fresh context. Caller holds sStateMutex; taking sCmdMutex here keeps the
-     * sStateMutex→sCmdMutex order used by DrainCommandsLocked (no deadlock). */
     {
-        std::lock_guard<std::mutex> cmdLock(sCmdMutex);
-        sCmdQueue.clear();
-    }
-    sState.pendingSamples.clear();
-    sState.pendingFrameOffset = 0;
-    sState.ctx.reset();
-    sState.rom.reset();
-    sState.songMapLoaded = false;
-    sState.songHeaderOffsets.fill(0);
-
-    if (gRomData == nullptr || gRomSize == 0 || !sState.initialized) {
-        return;
+        std::lock_guard<std::mutex> lock(sStateMutex);
+        sampleRate = sState.sampleRate;
+        soundMode = sState.soundMode;
+        agbplayMode = MakeAgbplayMode(); /* reads sState.gbaAccurate / reverbForceByte */
+        initialized = sState.initialized;
     }
 
-    try {
-        romSpan = std::span<uint8_t>(gRomData, gRomSize);
-        sState.rom = std::make_unique<Rom>(Rom::LoadFromBufferRef(romSpan));
+    if (gRomData != nullptr && gRomSize != 0 && initialized) {
+        try {
+            std::span<uint8_t> romSpan(gRomData, gRomSize);
+            SongTableInfo songTableInfo;
 
-        songTableInfo.pos = SongTableInfo::POS_AUTO;
-        songTableInfo.count = 0;
-        songTableInfo.tableIdx = 0;
+            songTableInfo.pos = SongTableInfo::POS_AUTO;
+            songTableInfo.count = 0;
+            songTableInfo.tableIdx = 0;
 
-        sState.ctx = std::make_unique<MP2KContext>(sState.sampleRate, -1, *sState.rom, MakeSoundMode(),
-                                                   MakeAgbplayMode(), songTableInfo, BuildPlayerTable());
-        sState.ctx->m4aSoundMode(sState.soundMode);
-    } catch (const std::exception& e) {
-        /* Malformed song table / ROM: leave the backend silent rather than
-         * letting agbplay's Xcept cross the extern "C" boundary. */
-        AudioGuardWarn("RebuildContextLocked", e.what());
-        sState.ctx.reset();
-        sState.rom.reset();
+            rom = std::make_unique<Rom>(Rom::LoadFromBufferRef(romSpan));
+            ctx = std::make_unique<MP2KContext>(sampleRate, -1, *rom, MakeSoundMode(), agbplayMode, songTableInfo,
+                                                BuildPlayerTable());
+            ctx->m4aSoundMode(soundMode);
+        } catch (const std::exception& e) {
+            /* Malformed song table / ROM: leave the backend silent rather than
+             * letting agbplay's Xcept cross the extern "C" boundary. */
+            AudioGuardWarn("RebuildContext", e.what());
+            ctx.reset();
+            rom.reset();
+        }
     }
+
+    {
+        std::lock_guard<std::mutex> lock(sStateMutex);
+        /* Drop any commands queued against the OLD context — the engine re-issues
+         * the room BGM after a reset, so a stale start/volume must not leak onto
+         * the fresh context. Taking sCmdMutex here keeps the sStateMutex→sCmdMutex
+         * order used by DrainCommandsLocked (no deadlock). */
+        {
+            std::lock_guard<std::mutex> cmdLock(sCmdMutex);
+            sCmdQueue.clear();
+        }
+        sState.pendingSamples.clear();
+        sState.pendingFrameOffset = 0;
+        /* Swap rather than assign so the old context outlives the lock. */
+        sState.ctx.swap(ctx);
+        sState.rom.swap(rom);
+    }
+
+    /* `ctx`/`rom` now own the previous context; it is destroyed here, unlocked.
+     * ctx must go first — it holds a reference to rom. */
+    ctx.reset();
+    rom.reset();
 }
 
 static bool HasActivePlaybackLocked(void) {
@@ -615,9 +669,6 @@ static void RenderChunkLocked(void) {
          * trip, and only the general case pays for the float scratch. The
          * old code always wrote 2*sampleCount floats and read them back, even
          * to produce silence. See port_m4a_mixdown.h. */
-        static std::vector<float> accL;
-        static std::vector<float> accR;
-
         sState.mixTracks.clear();
 
         const uint32_t playerCount =
@@ -663,12 +714,12 @@ static void RenderChunkLocked(void) {
         float* scratchL = nullptr;
         float* scratchR = nullptr;
         if (sState.mixTracks.size() > 1) {
-            if (accL.size() < sampleCount) {
-                accL.resize(sampleCount);
-                accR.resize(sampleCount);
+            if (sMixAccL.size() < sampleCount) {
+                sMixAccL.resize(sampleCount);
+                sMixAccR.resize(sampleCount);
             }
-            scratchL = accL.data();
-            scratchR = accR.data();
+            scratchL = sMixAccL.data();
+            scratchR = sMixAccR.data();
         }
 
         PortM4A_Mixdown(sState.mixTracks.data(), sState.mixTracks.size(), sampleCount, sState.masterVolume,
@@ -682,12 +733,20 @@ static void RenderChunkLocked(void) {
 } // namespace
 
 bool Port_M4A_Backend_Init(uint32_t sampleRate) {
+    /* Parse the song map here, unlocked, rather than lazily on the first
+     * StartSong: that path runs on the audio thread with sStateMutex held.
+     * Port_LoadRom (and region detection) precedes audio init, so the
+     * variant name is already correct at this point. */
+    std::array<size_t, kSongCount> songMap;
+    ParseSongMap(LoadSoundsJson(), songMap);
+
     std::lock_guard<std::mutex> lock(sStateMutex);
 
     sState.initialized = true;
     sState.sampleRate = sampleRate;
     sState.soundMode = 0;
     sState.vsyncEnabled = true;
+    sState.songHeaderOffsets = songMap;
     ResetTrackMixControlsLocked();
     return true;
 }
@@ -703,25 +762,29 @@ void Port_M4A_Backend_Shutdown(void) {
 }
 
 void Port_M4A_Backend_Reset(void) {
-    std::lock_guard<std::mutex> lock(sStateMutex);
+    {
+        std::lock_guard<std::mutex> lock(sStateMutex);
+        ResetTrackMixControlsLocked();
+    }
 
-    ResetTrackMixControlsLocked();
-    /* RebuildContextLocked destroys and reconstructs every MP2KTrack and its
+    /* RebuildContext destroys and reconstructs every MP2KTrack and its
        ReverbEffect (fresh zero-filled reverb buffer) and re-derives reverbForce
        from sState.reverbForceByte via MakeAgbplayMode — so a reverb tail can
        never bleed across an area/song change, and the user's chosen level
        persists. If a lighter soft-reset path is ever added that keeps the
        context alive, call trk.reverb->Reset() to flush the comb ring. */
-    RebuildContextLocked();
+    RebuildContext();
 }
 
 void Port_M4A_Backend_SoundInit(uint32_t soundMode) {
-    std::lock_guard<std::mutex> lock(sStateMutex);
+    {
+        std::lock_guard<std::mutex> lock(sStateMutex);
+        sState.soundMode = soundMode;
+        sState.vsyncEnabled = true;
+        ResetTrackMixControlsLocked();
+    }
 
-    sState.soundMode = soundMode;
-    sState.vsyncEnabled = true;
-    ResetTrackMixControlsLocked();
-    RebuildContextLocked();
+    RebuildContext();
 }
 
 void Port_M4A_Backend_SetSoundMode(uint32_t soundMode) {
@@ -765,7 +828,17 @@ static void StartSongLocked(uint8_t playerIndex, uint16_t songId) {
         sState.ctx->m4aMPlayStart(playerIndex, songPos);
         if (playerIndex < kPlayerCount)
             sState.currentSongId[playerIndex] = songId;
-    } catch (const std::exception& e) { AudioGuardWarn("StartSongLocked", e.what()); }
+    } catch (const std::exception& e) {
+        /* m4aMPlayStart parses the song header and every track pointer out of
+         * the ROM and throws if any is bogus, leaving the player half-started.
+         * Stop it so m4aSoundMain doesn't re-throw on it every buffer. */
+        AudioGuardWarn("StartSongLocked", e.what());
+        if (sState.ctx && playerIndex < sState.ctx->players.size()) {
+            sState.ctx->m4aMPlayStop(playerIndex);
+        }
+        if (playerIndex < kPlayerCount)
+            sState.currentSongId[playerIndex] = 0;
+    }
 }
 
 static void StopPlayerLocked(uint8_t playerIndex) {
@@ -833,18 +906,17 @@ static void ApplyCommandLocked(const M4ACommand& c) {
  * in order. Always entered with sStateMutex held (audio-thread render, or the
  * main-thread fast path), so the reused static is single-threaded in practice. */
 static void DrainCommandsLocked(void) {
-    static std::vector<M4ACommand> local;
     {
         std::lock_guard<std::mutex> lock(sCmdMutex);
         if (sCmdQueue.empty()) {
             return;
         }
-        local.swap(sCmdQueue);
+        sDrainedCommands.swap(sCmdQueue);
     }
-    for (const M4ACommand& c : local) {
+    for (const M4ACommand& c : sDrainedCommands) {
         ApplyCommandLocked(c);
     }
-    local.clear();
+    sDrainedCommands.clear();
 }
 
 /* Main-thread submit. The item-get freeze was the main thread BLOCKING on
@@ -1003,41 +1075,57 @@ void Port_M4A_Backend_Render(int16_t* outSamples, uint32_t frameCount, bool mute
     /* The main thread no longer takes sStateMutex for song/volume changes (they
      * go through the command queue) NOR for IsPlayerActive (it reads the atomic
      * mask published below). Per-chunk locking is retained only for the rare
-     * remaining setters/queries (SetMasterVolume, SetReverbLevel, F8 menu). */
-    while (framesRemaining > 0) {
-        size_t availableFrames;
-        size_t copyFrames;
+     * remaining setters/queries (SetMasterVolume, SetReverbLevel, F8 menu).
+     *
+     * SDL calls this on the audio thread through an extern "C" frame; letting
+     * anything unwind out of here is undefined behaviour (in practice
+     * std::terminate). RenderChunkLocked/StartSongLocked already contain
+     * agbplay's own exceptions — this is the backstop for everything else
+     * (bad_alloc from the pending/command buffers). */
+    try {
+        while (framesRemaining > 0) {
+            size_t availableFrames;
+            size_t copyFrames;
+            std::lock_guard<std::mutex> lock(sStateMutex);
+
+            DrainCommandsLocked();
+
+            if (!sState.ctx) {
+                memset(outSamples, 0, sizeof(int16_t) * framesRemaining * 2);
+                return;
+            }
+
+            if (sState.pendingFrameOffset >= sState.pendingSamples.size() / 2) {
+                RenderChunkLocked();
+                /* A chunk advanced player state — republish the lock-free liveness
+                 * mask so the main thread's duck sees the jingle end promptly. */
+                PublishActivePlayerMaskLocked();
+            }
+
+            availableFrames = (sState.pendingSamples.size() / 2) - sState.pendingFrameOffset;
+            if (availableFrames == 0) {
+                memset(outSamples, 0, sizeof(int16_t) * framesRemaining * 2);
+                return;
+            }
+
+            copyFrames = std::min<size_t>(availableFrames, framesRemaining);
+            if (mute) {
+                memset(outSamples, 0, sizeof(int16_t) * copyFrames * 2);
+            } else {
+                memcpy(outSamples, &sState.pendingSamples[sState.pendingFrameOffset * 2],
+                       sizeof(int16_t) * copyFrames * 2);
+            }
+
+            outSamples += copyFrames * 2;
+            framesRemaining -= static_cast<uint32_t>(copyFrames);
+            sState.pendingFrameOffset += copyFrames;
+        }
+    } catch (const std::exception& e) {
+        /* The per-iteration lock_guard was released by the unwind. */
         std::lock_guard<std::mutex> lock(sStateMutex);
-
-        DrainCommandsLocked();
-
-        if (!sState.ctx) {
-            memset(outSamples, 0, sizeof(int16_t) * framesRemaining * 2);
-            return;
-        }
-
-        if (sState.pendingFrameOffset >= sState.pendingSamples.size() / 2) {
-            RenderChunkLocked();
-            /* A chunk advanced player state — republish the lock-free liveness
-             * mask so the main thread's duck sees the jingle end promptly. */
-            PublishActivePlayerMaskLocked();
-        }
-
-        availableFrames = (sState.pendingSamples.size() / 2) - sState.pendingFrameOffset;
-        if (availableFrames == 0) {
-            memset(outSamples, 0, sizeof(int16_t) * framesRemaining * 2);
-            return;
-        }
-
-        copyFrames = std::min<size_t>(availableFrames, framesRemaining);
-        if (mute) {
-            memset(outSamples, 0, sizeof(int16_t) * copyFrames * 2);
-        } else {
-            memcpy(outSamples, &sState.pendingSamples[sState.pendingFrameOffset * 2], sizeof(int16_t) * copyFrames * 2);
-        }
-
-        outSamples += copyFrames * 2;
-        framesRemaining -= static_cast<uint32_t>(copyFrames);
-        sState.pendingFrameOffset += copyFrames;
+        AudioGuardWarn("Port_M4A_Backend_Render", e.what());
+        sState.ctx.reset();
+        sState.rom.reset();
+        memset(outSamples, 0, sizeof(int16_t) * framesRemaining * 2);
     }
 }

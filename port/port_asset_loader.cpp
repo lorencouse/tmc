@@ -38,6 +38,7 @@ extern Frame* gSpriteAnimations_322[];
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <charconv>
 #include <cstdarg>
 #include <cstdio>
 #include <filesystem>
@@ -126,6 +127,10 @@ struct SpritePtrEntryData {
 constexpr size_t kAreaCount = 0x90;
 constexpr size_t kSpritePtrMax = 512;
 constexpr size_t kSpriteAnim322Count = 128;
+/* gPaletteBuffer is u16[0x200] (port_linked_stubs.c) and each palette is
+ * 16 entries, so the destination holds exactly this many palettes. */
+constexpr size_t kPaletteSlotCount = 32;
+constexpr size_t kPaletteByteSize = 32;
 
 struct AssetGroupCache {
     bool initAttempted = false;
@@ -326,7 +331,15 @@ bool LoadJsonFile(const std::filesystem::path& path, nlohmann::json& outJson) {
         return false;
     }
 
-    input >> outJson;
+    /* Callers are reached from extern "C" entry points, so a parse_error
+     * escaping here would unwind into C and terminate. Degrade to false
+     * and let the caller fall back to the ROM. */
+    try {
+        input >> outJson;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[ASSET] JSON parse failed in %s: %s\n", PathForLog(path).c_str(), e.what());
+        return false;
+    }
     return true;
 }
 
@@ -611,8 +624,8 @@ void ParseSpritePtrs(const nlohmann::json& root) {
     gAssetGroupCache.spritePtrs.clear();
 
     if (root.is_array()) {
-        gAssetGroupCache.spritePtrs.resize(root.size());
-        for (size_t i = 0; i < root.size(); ++i) {
+        gAssetGroupCache.spritePtrs.resize(std::min(root.size(), kSpritePtrMax));
+        for (size_t i = 0; i < gAssetGroupCache.spritePtrs.size(); ++i) {
             const auto& jsonEntry = root[i];
             if (!jsonEntry.is_object()) {
                 continue;
@@ -640,16 +653,18 @@ void ParseSpritePtrs(const nlohmann::json& root) {
         return;
     }
 
-    size_t maxIndex = 0;
+    // Sprite IDs index a fixed 512-entry engine table. Validate before resizing:
+    // an unchecked maximum key can overflow maxIndex + 1 or exhaust memory.
     for (auto it = root.begin(); it != root.end(); ++it) {
-        maxIndex = std::max(maxIndex, static_cast<size_t>(std::stoul(it.key())));
-    }
-
-    gAssetGroupCache.spritePtrs.resize(maxIndex + 1);
-    for (auto it = root.begin(); it != root.end(); ++it) {
-        const size_t index = static_cast<size_t>(std::stoul(it.key()));
-        if (!it.value().is_object()) {
+        size_t index = 0;
+        const std::string& key = it.key();
+        const auto parsed = std::from_chars(key.data(), key.data() + key.size(), index);
+        if (parsed.ec != std::errc{} || parsed.ptr != key.data() + key.size() ||
+            index >= kSpritePtrMax || !it.value().is_object()) {
             continue;
+        }
+        if (gAssetGroupCache.spritePtrs.size() <= index) {
+            gAssetGroupCache.spritePtrs.resize(index + 1);
         }
 
         SpritePtrEntryData entry = {};
@@ -1384,15 +1399,7 @@ GfxLoadDecision EvaluateGfxControl(u8 unknown) {
 extern "C" u16 gPaletteBuffer[];
 
 extern "C" bool32 Port_LoadPaletteGroupFromAssets(u32 group) {
-    /* EU: never serve palette GROUPS from the extracted cache. The EU palette
-     * area drops two entries (gPalette_2432/2433) relative to USA, so the
-     * extractor's per-NAME file offsets sit +0x10/-0x40 off the id*32
-     * arithmetic the game's group table actually uses — group loads for
-     * palette ids >= ~2434 come out half-a-palette shifted (magenta/green
-     * garbled EU title BG, M6 bug). The loaded ROM resolves groups exactly
-     * (gGlobalGfxAndPalettes[paletteId * 32]); let LoadPaletteGroup fall
-     * through to it. Same shape as the JP gfx-group gate below. */
-    if (gRomRegion == ROM_REGION_EU) {
+    if (gRomRegion != ROM_REGION_USA) {
         return FALSE;
     }
     if (!EnsureAssetGroupCache()) {
@@ -1413,7 +1420,14 @@ extern "C" bool32 Port_LoadPaletteGroupFromAssets(u32 group) {
 
         for (const PaletteFileRefData& ref : entry.paletteFiles) {
             const std::vector<u8>* fileData = LoadBinaryFileCached(ref.file);
-            if (fileData == nullptr || ref.byteOffset + ref.size > fileData->size()) {
+            /* Guard the length actually read (numPalettes * 32), not the
+             * unrelated "size" field, and bound the destination: LoadPalettes
+             * copies straight into gPaletteBuffer without clamping. */
+            const size_t need = static_cast<size_t>(ref.numPalettes) * kPaletteByteSize;
+            if (fileData == nullptr || ref.byteOffset > fileData->size() ||
+                need > fileData->size() - ref.byteOffset ||
+                static_cast<size_t>(entry.destPaletteNum) + copiedPalettes + ref.numPalettes >
+                    kPaletteSlotCount) {
                 return FALSE;
             }
 
@@ -1440,13 +1454,9 @@ extern "C" bool32 Port_LoadPaletteGroupFromAssets(u32 group) {
 }
 
 extern "C" bool32 Port_LoadGfxGroupFromAssets(u32 group) {
-    /* The extracted assets/ cache is USA-baseline (asset baseline is USA). It
-     * lacks the JP-specific gfx groups — notably the JP title screen (group 2:
-     * ZELDA logo / ゼルダの伝説 / PRESS START on BG1). Loading the USA group for a
-     * JP ROM leaves BG1 empty (no logo). Skip the asset path for a JP ROM so
-     * LoadGfxGroup falls through to the region-correct ROM gfx (gGfxGroups[group]
-     * resolved from JP offsets). Matches the JP asset-override gate in port_rom.c. */
-    if (gRomRegion == ROM_REGION_JP) {
+    /* Extracted asset caches use the build-time baseline. A universal build is
+     * USA-based, so non-USA ROMs must retain their runtime-resolved ROM tables. */
+    if (gRomRegion != ROM_REGION_USA) {
         return FALSE;
     }
     if (!EnsureAssetGroupCache()) {
@@ -1466,7 +1476,10 @@ extern "C" bool32 Port_LoadGfxGroupFromAssets(u32 group) {
         const GfxLoadDecision decision = EvaluateGfxControl(entry.unknown);
 
         if (decision == GFX_STOP) {
-            return TRUE;
+            /* EU caches describe language-gated groups (6/15: file-select
+             * header) with no extracted files; only claim the group when
+             * something was actually copied, else LoadGfxGroup uses the ROM. */
+            break;
         }
 
         if (decision == GFX_LOAD && !entry.file.empty()) {
@@ -1519,7 +1532,7 @@ extern "C" bool32 Port_LoadGfxGroupFromAssets(u32 group) {
 }
 
 extern "C" bool32 Port_LoadAreaTablesFromAssets(void) {
-    if (gRomRegion == ROM_REGION_JP)
+    if (gRomRegion != ROM_REGION_USA)
         return FALSE;
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasAreaData) {
         return FALSE;
@@ -1539,20 +1552,19 @@ extern "C" bool32 Port_LoadAreaTablesFromAssets(void) {
 }
 
 extern "C" bool32 Port_LoadSpritePtrsFromAssets(void) {
-    /* JP: never reseed gSpritePtrs from the (USA-baseline) asset cache. Doing so
+    /* Never reseed non-USA sprite pointers from the USA-baseline cache. Doing so
      * overwrites every gSpritePtrs[i].animations with a *native* heap pointer, which
-     * is fine on USA/EU (Port_GetSpriteAnimationData reads it via the asset-cache
-     * branch) but breaks JP: there Port_GetSpriteAnimationData is gated to the ROM
-     * branch (gRomRegion != ROM_REGION_JP) and validates spr->animations with
+     * is fine on USA, but breaks other regions: Port_GetSpriteAnimationData uses its ROM
+     * branch there and validates spr->animations with
      * IsRomPointer() — a native pointer fails, resolves to NULL, and the entity gets
      * no animation. With a NULL animPtr FrameZero never runs, so frameIndex stays
      * 0xFF (sprite invisible — intro Zelda/Smith), animations freeze (file-select
      * preview sprite 325), and ANIM_DONE is never set so cutscene WaitForAnimDone
      * blocks forever and never returns control (Link frozen at the intro handover).
-     * port_rom.c:1714 already skips its own override call for JP, but the asset
+     * port_rom.c already skips its own non-USA override call, but the asset
      * bootstrap (port_asset_bootstrap.cpp) calls this ungated — gate it here too so
-     * JP keeps its region-correct ROM-resolved gSpritePtrs regardless of caller. */
-    if (gRomRegion == ROM_REGION_JP) {
+     * each region keeps its ROM-resolved gSpritePtrs regardless of caller. */
+    if (gRomRegion != ROM_REGION_USA) {
         return FALSE;
     }
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasSpritePtrData || gAssetGroupCache.spritePtrs.empty()) {
@@ -1728,7 +1740,7 @@ extern "C" bool32 Port_LoadSpritePtrsFromAssets(void) {
 }
 
 extern "C" bool32 Port_LoadTextsFromAssets(void) {
-    if (gRomRegion == ROM_REGION_JP)
+    if (gRomRegion != ROM_REGION_USA)
         return FALSE;
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasTextData) {
         return FALSE;
@@ -1781,7 +1793,7 @@ extern "C" bool32 Port_AreSpritePtrsLoadedFromAssets(void) {
 }
 
 extern "C" bool32 Port_RefreshAreaDataFromAssets(u32 area) {
-    if (gRomRegion == ROM_REGION_JP)
+    if (gRomRegion != ROM_REGION_USA)
         return FALSE;
     if (!EnsureAssetGroupCache() || !gAssetGroupCache.hasAreaData || area >= kAreaCount) {
         return FALSE;
@@ -1898,7 +1910,7 @@ extern "C" const u8* Port_GetSpriteAnimationData(u16 spriteIndex, u32 animIndex)
      * region-correct ROM-resolved gSpritePtrs (the "asset override skipped for JP"
      * gate), so resolve JP animations straight from the ROM below, consistent with
      * that decision, instead of the asset cache. */
-    if (gRomRegion != ROM_REGION_JP && EnsureAssetGroupCache()) {
+    if (gRomRegion == ROM_REGION_USA && EnsureAssetGroupCache()) {
         if (!gAssetGroupCache.spritePtrsLoaded) {
             Port_LoadSpritePtrsFromAssets();
         }

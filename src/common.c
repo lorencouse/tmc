@@ -103,7 +103,9 @@ void SortKinstoneBag(void);
 
 extern void* GetRoomProperty(u32, u32, u32);
 
-extern u8 gMapData[];
+#ifndef PC_PORT
+extern u8 gMapData[]; /* PC: u8* declared in port_rom.h */
+#endif
 extern const DungeonLayout* const* const gDungeonLayouts[];
 extern u16 gMapDataBottomSpecial[];
 
@@ -562,7 +564,19 @@ void LoadGfxGroup(u32 group) {
                     LZ77UnCompWram(src, (void*)dest);
                 }
             } else {
+#ifdef PC_PORT
+                /* Mirror port_asset_loader: gMapTop/gMapBottom/gMapData*Special are
+                 * native globals outside gEwram[], which only Port_ResolveEwramPtr
+                 * knows; DmaSet would write the flat mirror instead. */
+                void* nativeDest = (dest >= 0x02000000u && dest < 0x02040000u) ? Port_ResolveEwramPtr(dest) : NULL;
+                if (nativeDest != NULL) {
+                    memcpy(nativeDest, src, (u32)size & ~1u);
+                } else {
+                    DmaSet(3, src, dest, dmaCtrl | ((u32)size >> 1));
+                }
+#else
                 DmaSet(3, src, dest, dmaCtrl | ((u32)size >> 1));
+#endif
             }
         }
 
@@ -735,6 +749,9 @@ void DispReset(bool32 refresh) {
     gScreen.vBlankDMA.ready = FALSE;
     DmaStop(0);
 #ifdef PC_PORT
+    /* DmaStop(0) is a host no-op; retail stops DMA0 here after the room-exit
+     * fade, so per-scanline affine HDMA must not leak into the next room. */
+    port_hdma_unregister(0);
     gba_write16(REG_ADDR_DISPCNT, 0);
 #else
     REG_DISPCNT = 0;
@@ -1556,9 +1573,38 @@ void UpdateVisibleFusionMapMarkers(void) {
     }
 }
 
-/* This table is packed 4-byte GBA pointers; `gUnk_08001DCC[idx]` would
- * read 8 bytes on x86-64. Use Port_UnpackRomDataPtr instead. */
+#ifndef PC_PORT
 extern const u8 gUnk_08001DCC[];
+#endif
+
+#ifdef PC_PORT
+/* Retail records have a five-byte header, up to six offers and a zero
+ * terminator. Port_GetFuserFusionData guarantees twelve readable bytes. */
+static s32 GetFuserListLength(const u8* data) {
+    for (u32 length = 0; length <= 6; ++length) {
+        u32 offer = data[5 + length];
+        if (offer == KINSTONE_NONE) {
+            return length;
+        }
+        if (offer > 100 && offer != KINSTONE_RANDOM) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
+static bool32 IsFuserCursorValid(u32 progress, u32 offer, u32 length) {
+    if (progress > length) {
+        return FALSE;
+    }
+    if (offer > 100 && offer != KINSTONE_NEEDS_REPLACEMENT && offer != KINSTONE_JUST_FUSED &&
+        offer != KINSTONE_FUSER_DONE && offer != KINSTONE_RANDOM) {
+        return FALSE;
+    }
+    /* These states may advance before reading the next list entry. */
+    return progress < length || (offer != KINSTONE_JUST_FUSED && offer != KINSTONE_RANDOM);
+}
+#endif
 
 KinstoneId GetFusionToOffer(Entity* entity) {
     u8* fuserData;
@@ -1568,10 +1614,13 @@ KinstoneId GetFusionToOffer(Entity* entity) {
     u8* fuserFusionData;
     s32 randomMood;
     u32 fuserStability;
+#ifdef PC_PORT
+    s32 listLength;
+#endif
     fuserId = GetFuserId(entity);
 
 #ifdef PC_PORT
-    fuserData = (u8*)Port_UnpackRomDataPtr(gUnk_08001DCC, fuserId);
+    fuserData = (u8*)Port_GetFuserFusionData(fuserId);
 #else
     fuserData = (u8*)((u8**)gUnk_08001DCC)[fuserId];
 #endif
@@ -1583,8 +1632,21 @@ KinstoneId GetFusionToOffer(Entity* entity) {
     }
     offeredFusion = gSave.kinstones.fuserOffers[fuserId];
     fuserProgress = gSave.kinstones.fuserProgress[fuserId];
+#ifdef PC_PORT
+    listLength = GetFuserListLength(fuserData);
+    if (listLength < 0 || !IsFuserCursorValid(fuserProgress, offeredFusion, listLength)) {
+        return KINSTONE_NONE;
+    }
+#endif
     fuserFusionData = fuserData + fuserProgress;
     while (TRUE) { // loop through fusions for this fuser
+#ifdef PC_PORT
+        /* Check again after exhausted random offers or completed fusions
+         * advance the local state. Nothing is saved until scanning succeeds. */
+        if (!IsFuserCursorValid(fuserProgress, offeredFusion, listLength)) {
+            return KINSTONE_NONE;
+        }
+#endif
         switch (offeredFusion) {
             case KINSTONE_NEEDS_REPLACEMENT: // offered fusion completed with someone else
             case KINSTONE_NONE:              // no fusion offered yet

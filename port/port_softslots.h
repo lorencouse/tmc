@@ -32,12 +32,15 @@ void Port_SoftSlots_Update(void);
  * input layer ORs B_BUTTON into KEYINPUT in this case so the engine sees
  * a regular B-press and routes it through CreateItemIfInputMatches. */
 bool Port_SoftSlots_IsBHeld(void);
+int Port_SoftSlots_GetActiveSlot(void);
 
 /* Returns the soft-slot's item if a slot is active, else `saved`. Used by
  * src/playerUtils.c at the B-dispatch site to override the effective
  * equipped[SLOT_B] without touching gSave. */
 uint8_t Port_SoftSlots_GetEffectiveBItem(uint8_t saved);
 
+/* Usable assignment in the current save, or zero if invalid/unowned.
+ * Stored preferences and labels are retained when changing saves. */
 uint8_t Port_SoftSlots_GetAssignment(int slot);
 void    Port_SoftSlots_SetAssignment(int slot, uint8_t itemId);
 const char* Port_SoftSlots_SlotName(int slot);

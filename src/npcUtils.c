@@ -29,10 +29,7 @@ typedef struct {
 } NPCData;
 #ifdef PC_PORT
 #include "port_rom.h"
-extern const u8 gUnk_08001A7C[];
-static NPCData* GetFusionNpcData(u32 fuserId) {
-    return (NPCData*)Port_UnpackRomDataPtr(gUnk_08001A7C, fuserId);
-}
+#define GetFusionNpcData(fuserId) ((NPCData*)Port_GetFusionTextData(fuserId))
 #else
 extern NPCData* gUnk_08001A7C[];
 #define GetFusionNpcData(fuserId) (gUnk_08001A7C[fuserId])
@@ -103,10 +100,20 @@ void NPCInit(Entity* this) {
                     this->spriteVramOffset = definition->bitfield.gfx;
                     break;
                 case 1:
+#ifdef PC_PORT
+                    if (!LoadSwapGFX(this, tmp, 0))
+                        return;
+#else
                     LoadSwapGFX(this, tmp, 0);
+#endif
                     break;
                 default:
+#ifdef PC_PORT
+                    if (!LoadFixedGFX(this, tmp))
+                        return;
+#else
                     LoadFixedGFX(this, tmp);
+#endif
                     break;
             }
             tmp = definition->data.sprite.paletteIndex;

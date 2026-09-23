@@ -36,6 +36,9 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h> /* MoveFileExA — rename() refuses to clobber on Win32 */
+#endif
 
 /* Engine-side queries used by the assignment UI. Declared as plain externs
  * so this TU doesn't drag in the full game headers (and the type collisions
@@ -81,7 +84,7 @@ void Port_SoftSlots_Update(void) {
     int newlyPressed = -1;
 
     for (int i = 0; i < PORT_SOFTSLOT_COUNT; i++) {
-        nowHeld[i] = Port_Config_SoftSlotPressed(i) && sAssignments[i] != 0;
+        nowHeld[i] = Port_Config_SoftSlotPressed(i) && Port_SoftSlots_GetAssignment(i) != 0;
         if (nowHeld[i] && !sPrevHeld[i]) {
             /* Later iterations overwrite, giving last-iterated == highest-
              * index newly-pressed slot priority. */
@@ -108,18 +111,26 @@ void Port_SoftSlots_Update(void) {
 }
 
 bool Port_SoftSlots_IsBHeld(void) {
-    return sActiveSlot >= 0;
+    return Port_SoftSlots_GetAssignment(sActiveSlot) != 0;
+}
+
+int Port_SoftSlots_GetActiveSlot(void) {
+    return sActiveSlot;
 }
 
 uint8_t Port_SoftSlots_GetEffectiveBItem(uint8_t saved) {
     if (sActiveSlot < 0) return saved;
-    uint8_t a = sAssignments[sActiveSlot];
+    uint8_t a = Port_SoftSlots_GetAssignment(sActiveSlot);
     return a ? a : saved;
 }
 
 uint8_t Port_SoftSlots_GetAssignment(int slot) {
     if (slot < 0 || slot >= PORT_SOFTSLOT_COUNT) return 0;
-    return sAssignments[slot];
+    /* Saved preferences are shared across game slots/profiles. Validate at
+     * dispatch time too, since a load can change inventory after input polling.
+     * Only the item IDs accepted by CreateItemIfInputMatches are usable. */
+    uint8_t item = sAssignments[slot];
+    return item >= 1 && item <= 31 && GetInventoryValue(item) == 1 ? item : 0;
 }
 
 void Port_SoftSlots_SetAssignment(int slot, uint8_t itemId) {
@@ -129,11 +140,23 @@ void Port_SoftSlots_SetAssignment(int slot, uint8_t itemId) {
 }
 
 void Port_SoftSlots_Save(void) {
-    FILE* f = fopen(SOFTSLOT_FILENAME, "wb");
+    /* Write-then-rename, same as port_save.c: opening the live file "wb"
+     * would truncate it before a byte is written. */
+    FILE* f = fopen(SOFTSLOT_FILENAME ".tmp", "wb");
     if (!f) return;
-    fwrite(SOFTSLOT_MAGIC, 1, sizeof(SOFTSLOT_MAGIC), f);
-    fwrite(sAssignments, 1, sizeof(sAssignments), f);
-    fclose(f);
+    int ok = fwrite(SOFTSLOT_MAGIC, 1, sizeof(SOFTSLOT_MAGIC), f) == sizeof(SOFTSLOT_MAGIC) &&
+             fwrite(sAssignments, 1, sizeof(sAssignments), f) == sizeof(sAssignments);
+    if (fflush(f) != 0) ok = 0;
+    if (fclose(f) != 0) ok = 0;
+#ifdef _WIN32
+    if (ok) ok = MoveFileExA(SOFTSLOT_FILENAME ".tmp", SOFTSLOT_FILENAME, MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+    if (ok) ok = rename(SOFTSLOT_FILENAME ".tmp", SOFTSLOT_FILENAME) == 0;
+#endif
+    if (!ok) {
+        remove(SOFTSLOT_FILENAME ".tmp");
+        fprintf(stderr, "[SOFTSLOTS] ERROR: Could not write %s\n", SOFTSLOT_FILENAME);
+    }
 }
 
 void Port_SoftSlots_Load(void) {

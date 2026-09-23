@@ -19,12 +19,21 @@
 #include "asm.h"
 #include "port_debug_query.h"
 #include "port_debug_actions.h"
+#include "port_debug_menu.h"
+#include <stdio.h>
+/* Forward-declared to avoid pulling in port_runtime_config.h (which includes
+ * SDL3/SDL.h, unavailable in the debug_actions_test build target). */
+extern bool Port_Config_GetDebugFlagNotifications(void);
 
 void DoExitTransition(const Transition* data);
 void LoadItemGfx(void);
 void UpdatePlayerSkills(void);
 extern bool32 Port_IsRoomHeaderPtrReadable(const void* ptr);
 extern void Port_RefreshAreaData(unsigned int area);
+/* Forward-declared here so this pure-C TU can call into port_flag_names.cpp
+ * (which exports them as extern "C") without pulling in a C++ header. */
+extern const char* Port_DebugQuery_FlagName(int bank, int index);
+extern const char* Port_DebugQuery_FlagDesc(int bank, int index);
 
 #define DEBUG_AREA_COUNT 0x90 /* matches kAreaCount in port_asset_loader.cpp */
 
@@ -358,7 +367,7 @@ int Port_DebugAction_WarpSpawnOverride(unsigned char area, unsigned char room, u
  * to DoExitTransition() — the exact path the wallmaster + scripted area
  * exits use, so the player ends up properly initialized (correct spawn
  * type, facing direction, layer, fade type). Returns 0 if it can't fire
- * right now (game not in TASK_GAME, or player dying), 1 if armed.
+ * right now (game not ready, or player dying), 1 if armed.
  *
  * The previous hand-rolled version wrote gRoomTransition fields directly,
  * which (a) didn't run the area-warp transition-type setup so dungeon
@@ -369,6 +378,13 @@ int Port_DebugAction_Warp(unsigned char area, unsigned char room, unsigned short
                           unsigned char layer) {
     Transition t;
     if (gMain.task != TASK_GAME) {
+        return 0;
+    }
+    /* TASK_GAME is set before room/player initialization finishes. A debug
+     * probe can run in that gap; DoExitTransition dereferences the camera
+     * target for preserve-position coordinates (> 0x3ff). Wait for a live
+     * camera target instead of interrupting initialization. */
+    if (gRoomControls.camera_target == NULL) {
         return 0;
     }
     if (gSave.stats.health == 0 || gPlayerState.framestate == PL_STATE_DIE) {
@@ -1239,6 +1255,88 @@ void Port_DebugAction_SetFlag(int bank, int index, int on) {
         gSave.flags[bit >> 3] |= (unsigned char)(1u << (bit & 7));
     } else {
         gSave.flags[bit >> 3] &= (unsigned char)~(1u << (bit & 7));
+    }
+
+    /* Flag notification hook — log + toast when the toggle is active. */
+    if (on && Port_Config_GetDebugFlagNotifications()) {
+        const char* bankName = Port_DebugQuery_FlagBankName(bank);
+        const char* flagName = Port_DebugQuery_FlagName(bank, index);
+        char msg[128];
+        if (flagName && flagName[0] != '\0') {
+            snprintf(msg, sizeof(msg), "[Flag] %s / idx %d: %s", bankName, index, flagName);
+        } else {
+            snprintf(msg, sizeof(msg), "[Flag] %s / idx %d (bit 0x%03X)", bankName, index, (unsigned)bit);
+        }
+        if (flagName && flagName[0] != '\0') {
+            const char* flagDesc = Port_DebugQuery_FlagDesc(bank, index);
+            if (flagDesc && flagDesc[0] != '\0') {
+                fprintf(stderr, "\033[33m%s -> %s\033[0m\n", msg, flagDesc);
+            } else {
+                fprintf(stderr, "\033[33m%s\033[0m\n", msg);
+            }
+        } else {
+            fprintf(stderr, "\033[33m%s\033[0m\n", msg);
+        }
+        Port_DebugMenu_ToastFromExternal(msg);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Engine-side flag hook (called from src/flags.c SetLocalFlagByBank) */
+/* ------------------------------------------------------------------ */
+
+/* Called by the engine every time a flag is committed to gSave.flags.
+ * Resolves (offset, flag) → (bank, index) and emits a log/toast when
+ * the notification toggle is enabled.  Room flags are intentionally
+ * excluded — they are volatile per-room state, not save-persistent. */
+void Port_Debug_OnFlagSet(u32 offset, u32 flag) {
+    int bank, nBanks, bankSize;
+    unsigned int bit;
+
+    if (!Port_Config_GetDebugFlagNotifications())
+        return;
+
+    bit = (unsigned int)offset + (unsigned int)flag;
+
+    /* Resolve to a bank index by matching the offset. */
+    nBanks = Port_DebugQuery_FlagBankCount();
+    bank = -1;
+    {
+        int b;
+        for (b = 0; b < nBanks; ++b) {
+            if ((unsigned int)Port_DebugQuery_FlagBankOffset(b) == (unsigned int)offset) {
+                bank = b;
+                break;
+            }
+        }
+    }
+    if (bank < 0)
+        return; /* unknown bank — skip */
+
+    bankSize = Port_DebugQuery_FlagBankSize(bank);
+    if ((int)flag < 0 || (int)flag >= bankSize)
+        return;
+
+    {
+        const char* bankName = Port_DebugQuery_FlagBankName(bank);
+        const char* flagName = Port_DebugQuery_FlagName(bank, (int)flag);
+        char msg[128];
+        if (flagName && flagName[0] != '\0') {
+            snprintf(msg, sizeof(msg), "[Flag] %s / idx %d: %s", bankName, (int)flag, flagName);
+        } else {
+            snprintf(msg, sizeof(msg), "[Flag] %s / idx %d (bit 0x%03X)", bankName, (int)flag, bit);
+        }
+        if (flagName && flagName[0] != '\0') {
+            const char* flagDesc = Port_DebugQuery_FlagDesc(bank, (int)flag);
+            if (flagDesc && flagDesc[0] != '\0') {
+                fprintf(stderr, "\033[33m%s -> %s\033[0m\n", msg, flagDesc);
+            } else {
+                fprintf(stderr, "\033[33m%s\033[0m\n", msg);
+            }
+        } else {
+            fprintf(stderr, "\033[33m%s\033[0m\n", msg);
+        }
+        Port_DebugMenu_ToastFromExternal(msg);
     }
 }
 

@@ -7,7 +7,12 @@
  * signed half before C's truncating conversion is the same
  * round-half-away-from-zero for every finite PCM input in range. */
 static inline int16_t Quantize(float value) {
-    if (value > 1.0f) {
+    /* NaN fails both comparisons below and its float-to-int conversion is
+     * undefined, so one corrupt sample would become a platform-dependent pop.
+     * ±inf is already caught by the clamp. */
+    if (value != value) {
+        value = 0.0f;
+    } else if (value > 1.0f) {
         value = 1.0f;
     } else if (value < -1.0f) {
         value = -1.0f;
