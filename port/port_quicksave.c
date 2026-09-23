@@ -64,6 +64,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <SDL3/SDL.h>
 
@@ -466,21 +471,59 @@ static void ThumbFilename(int slot, char* out, size_t cap) {
     snprintf(out, cap, "%.*s.thumb", stem, base);
 }
 
+/* Slot and thumbnail files are written to a sibling ".tmp", flushed to disk
+ * and renamed over the target, so a crash, a full card or a power cut during
+ * an overwrite leaves the previous state intact instead of a truncated file.
+ * Same pattern as WriteEepromAtomic in port_save.c; SDL_RenamePath replaces
+ * an existing file on every platform. */
+static FILE* OpenAtomic(const char* path, char* tmp, size_t cap) {
+    if ((size_t)snprintf(tmp, cap, "%s.tmp", path) >= cap) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    return fopen(tmp, "wb");
+}
+
+/* Flushes, syncs and closes f, then renames tmp over path. On any failure tmp
+ * is removed, path is untouched, errno is kept and 0 is returned. */
+static int CommitAtomic(FILE* f, const char* tmp, const char* path) {
+    int ok = fflush(f) == 0;
+#ifdef _WIN32
+    ok = ok && _commit(_fileno(f)) == 0;
+#else
+    ok = ok && fsync(fileno(f)) == 0;
+#endif
+    if (fclose(f) != 0)
+        ok = 0;
+    if (ok && !SDL_RenamePath(tmp, path)) {
+        fprintf(stderr, "[quicksave] rename %s failed: %s\n", tmp, SDL_GetError());
+        ok = 0;
+    }
+    if (!ok) {
+        const int saved = errno;
+        remove(tmp);
+        errno = saved;
+    }
+    return ok;
+}
+
 static void WriteThumbToDisk(int slot) {
     if (slot < 0 || slot >= NUM_SLOTS || !sThumbValid[slot])
         return;
-    char path[80];
+    char path[80], tmp[88];
     ThumbFilename(slot, path, sizeof(path));
-    FILE* f = fopen(path, "wb");
+    FILE* f = OpenAtomic(path, tmp, sizeof(tmp));
     if (!f)
         return; /* best-effort: a missing preview is not worth a failed save */
     const u32 magic = THUMB_MAGIC;
     const u16 w = THUMB_W, h = THUMB_H;
     if (fwrite(&magic, sizeof(magic), 1, f) == 1 && fwrite(&w, sizeof(w), 1, f) == 1 &&
-        fwrite(&h, sizeof(h), 1, f) == 1) {
-        fwrite(sThumbs[slot], 1, THUMB_BYTES, f);
+        fwrite(&h, sizeof(h), 1, f) == 1 && fwrite(sThumbs[slot], 1, THUMB_BYTES, f) == THUMB_BYTES) {
+        CommitAtomic(f, tmp, path);
+    } else {
+        fclose(f);
+        remove(tmp);
     }
-    fclose(f);
 }
 
 static int ReadThumbFromDisk(int slot) {
@@ -511,9 +554,9 @@ static int WriteSlotToDisk(int slot) {
     if (!s->valid || s->snapshot == NULL)
         return 0;
 
-    char path[64];
+    char path[64], tmp[72];
     SlotFilename(slot, path, sizeof(path));
-    FILE* f = fopen(path, "wb");
+    FILE* f = OpenAtomic(path, tmp, sizeof(tmp));
     if (!f) {
         fprintf(stderr, "[quicksave] open %s for write failed (%s)\n", path, strerror(errno));
         return 0;
@@ -533,17 +576,20 @@ static int WriteSlotToDisk(int slot) {
         fwrite(&session, sizeof(session), 1, f) != 1 || fwrite(&region_tag, sizeof(region_tag), 1, f) != 1) {
         fprintf(stderr, "[quicksave] header write failed for %s\n", path);
         fclose(f);
+        remove(tmp);
         return 0;
     }
     errno = 0;
     const size_t written = fwrite(s->snapshot, 1, s->bytes, f);
-    /* fwrite is buffered; ENOSPC usually surfaces in fclose's final flush. */
-    const int closed = fclose(f);
-    if (written != s->bytes || closed != 0) {
+    /* fwrite is buffered; ENOSPC usually surfaces in the final flush. */
+    if (written != s->bytes) {
+        fclose(f);
+        remove(tmp);
+    }
+    if (written != s->bytes || !CommitAtomic(f, tmp, path)) {
         const int err = errno;
-        fprintf(stderr, "[quicksave] short write %s (%zu/%zu): %s\n", path, written, s->bytes,
-                err ? strerror(err) : "unknown error");
-        remove(path);
+        fprintf(stderr, "[quicksave] write %s failed (%zu/%zu): %s; the previous file is kept\n", path, written,
+                s->bytes, err ? strerror(err) : "unknown error");
         return 0;
     }
     return 1;
