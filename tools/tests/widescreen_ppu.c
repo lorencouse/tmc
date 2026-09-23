@@ -69,6 +69,35 @@ int main(void) {
         }
         if (failures) break;
     }
+    /* Tall view: a message box across the HUD split at line 80 moves whole
+     * with the half holding most of it. BG0 rows 56..103 are the box. */
+    virtuappu_mode1_ws_shadow[3] = NULL;
+    memset(io, 0, sizeof(io));
+    memset(vram + 0xf000, 0, 0x800);
+    io[1] = 1; /* BG0 only */
+    io[8] = 4; io[9] = 0x1e;
+    for (int row = 7; row < 13; ++row)
+        for (int col = 0; col < 32; ++col) screen[row * 32 + col] = 1;
+    p.frame_width = 320; p.frame_height = 240;
+    virtuappu_mode1_tall_hud_split = 1;
+    virtuappu_mode1_ws_msg_shift = 40;
+    virtuappu_mode1_ws_msg_x0 = 0; virtuappu_mode1_ws_msg_x1 = 240;
+    const struct { int y0, y1, red_from, red_to; } boxes[] = {
+        { 56, 104, 136, 184 }, /* mostly below 80: all of it at the bottom */
+        { 56, 96, 56, 96 },    /* mostly above: kept at the top */
+    };
+    for (int b = 0; b < 2; ++b) {
+        virtuappu_mode1_ws_msg_y0 = boxes[b].y0; virtuappu_mode1_ws_msg_y1 = boxes[b].y1;
+        virtuappu_mode1_render_frame(&p);
+        for (int line = 0; line < 240; ++line) {
+            int red = (line >= boxes[b].red_from && line < boxes[b].red_to) ||
+                      (b == 1 && line >= 176 && line < 184); /* rows 96..103, outside the box */
+            expect(b ? "box kept at top" : "box moved down",
+                   virtuappu_frame_buffer[line * MODE1_GBA_WIDTH + 100], red ? 0xff0000f8 : 0xff00f800);
+            if (failures) { fprintf(stderr, "  line %d\n", line); break; }
+        }
+    }
+    virtuappu_mode1_tall_hud_split = 0; virtuappu_mode1_ws_msg_shift = 0;
     if (!failures) puts("widescreen CPU PPU: PASS");
     return failures != 0;
 }

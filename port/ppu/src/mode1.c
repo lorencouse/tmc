@@ -448,9 +448,22 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
      * default textbox) to the bottom of the taller frame; nothing in between. */
     if (bg_index == 0 && virtuappu_mode1_tall_hud_split && mode1_frame_height > MODE1_GBA_HEIGHT) {
         const int half = MODE1_GBA_HEIGHT / 2;
+        const int drop = mode1_frame_height - MODE1_GBA_HEIGHT;
+        /* A message box across the split moves whole, with the half that
+         * holds most of it, instead of tearing at line 80. */
+        const int msg_y0 = virtuappu_mode1_ws_msg_y0, msg_y1 = virtuappu_mode1_ws_msg_y1;
+        const bool msg_straddles = virtuappu_mode1_ws_msg_shift != 0 && msg_y0 < half && msg_y1 > half;
+        const bool msg_low = msg_straddles && msg_y0 + msg_y1 >= 2 * half;
         if (line >= mode1_frame_height - half) {
-            line -= mode1_frame_height - MODE1_GBA_HEIGHT;
-        } else if (line >= half) {
+            line -= drop;
+            if (msg_straddles && !msg_low && line < msg_y1) {
+                return; /* drawn in the top half instead */
+            }
+        } else if (msg_low && line >= msg_y0 + drop) {
+            line -= drop; /* the box's rows above the split, moved down */
+        } else if (msg_straddles && !msg_low && line >= half && line < msg_y1) {
+            /* the box's rows below the split, kept in place */
+        } else if (line >= half || (msg_low && line >= msg_y0)) {
             return;
         }
     }
