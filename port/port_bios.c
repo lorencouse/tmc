@@ -202,6 +202,10 @@ static void Port_UpdateInput(void) {
      * one item-get cutscene and holds it so TMC_PROFILE captures the drop. */
     { Port_ReproItemGet_Tick(sFrameNum); }
 
+    /* Check tracker test (TMC_REPRO_TRACKER=1): boots slot 0 and checks what
+     * port_tracker.c reads from it. */
+    { Port_ReproTracker_Tick(sFrameNum); }
+
     {
         /* While either overlay is open, hold all GBA buttons released so
          * the game doesn't observe stray input from key presses we routed

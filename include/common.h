@@ -130,6 +130,8 @@ void AddKinstoneToBag(u32);
 void InitializeFuseInfo(struct Entity_* entity, u32 textIndex, u32 cancelledTextIndex, u32 fusingTextIndex);
 u32 PerformFuseAction(void);
 bool32 CheckFusionMapMarkerDisabled(u32);
+u32 GetFusionWorldEventId(u32);
+bool32 CheckFusionEventDone(u32);
 u32 sub_0801DB94(void);
 u32 GetRandomSharedFusion(u8*);
 

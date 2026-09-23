@@ -23,6 +23,7 @@ void Port_ReproRoomCap_Tick(unsigned int frame);
 void Port_ReproRollMacro_Tick(unsigned int frame);
 void Port_ReproNpcTalk_Tick(unsigned int frame);
 void Port_ReproItemGet_Tick(unsigned int frame);
+void Port_ReproTracker_Tick(unsigned int frame);
 
 #ifdef __cplusplus
 }

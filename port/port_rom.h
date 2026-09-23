@@ -90,6 +90,7 @@ u16 Port_GetTileTypeProperty(u32 tileType);
 void* Port_GetFuserFusionData(u32 fuserId);
 void* Port_GetLilypadRail(u32 index);
 u64 Port_GetEntityFuserData(u32 kind, u8 id, u8 type, u8 type2);
+int Port_GetFuserTableEntry(u32 kind, u32 index, u8* id, u8* type, u8* type2, u8* fuserId);
 
 void* Port_ReadPackedRomPtr(const void* base, u32 index);
 
