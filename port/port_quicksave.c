@@ -98,7 +98,7 @@ extern u32 gRand; /* port_linked_stubs.c; restored on a cross-session resume */
 #define NUM_SLOTS (NUM_MANUAL_SLOTS + NUM_AUTO_SLOTS)
 #define MAGIC 0x53434D54u /* "TMCS" little-endian */
 #define VERSION                                         \
-    7u /* v2: header carries gEntities base address for \
+    8u /* v2: header carries gEntities base address for \
         * cross-process pointer-fixup on restore.       \
         * v3: gRand added to region list so RNG         \
         * state round-trips (GBA had it in IWRAM).      \
@@ -112,7 +112,10 @@ extern u32 gRand; /* port_linked_stubs.c; restored on a cross-session resume */
         * v7: full host-global coverage (list heads,    \
         * textbox, scripts, ...); the header carries a  \
         * session id instead of the gEntities base, and \
-        * cross-session loads resume via the engine.    */
+        * cross-session loads resume via the engine.    \
+        * v8: upstream v0.9.3 merge -- two aliased      \
+        * globals left the region list and entity       \
+        * layouts moved; v7 files do not fit.           */
 
 typedef struct {
     u8* snapshot; /* heap, NULL if slot empty */
