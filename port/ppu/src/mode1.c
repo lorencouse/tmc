@@ -1250,6 +1250,10 @@ void virtuappu_mode1_render_affine_obj_overlay(uint32_t* dst, int dst_w, int dst
             bounds_height *= 2;
         }
 
+        /* Native-height frames only (checked above): a sprite recorded below
+         * line 160 would wrap to the top, as in render_obj_line. */
+        if (virtuappu_mode1_obj_y_full[i] != MODE1_OBJ_Y_NONE && virtuappu_mode1_obj_y_full[i] >= MODE1_GBA_HEIGHT)
+            continue;
         int obj_y = mode1_oam_y(attr);
         if (obj_y >= MODE1_GBA_HEIGHT)
             obj_y -= 256;
