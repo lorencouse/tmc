@@ -103,8 +103,23 @@ static void RefreshConfig(uint64_t seed, int tunic_pick, int heart_pick) {
     sCfg.heart = (heart_pick >= 0 && heart_pick < 6) ? heart_pick : 0;
 }
 
+/* Colours outside the tunic ramp that all six Link palette rows in the ROM
+ * share. A generic ramp such as Grey can also turn up in an NPC or statue
+ * row; checking these keeps the match on Link. */
+#define LINK_IDX_FIX1 1
+#define LINK_IDX_FIX2 2
+#define LINK_IDX_FIX6 6
+#define LINK_IDX_FIX8 8
+#define LINK_VAN_FIX1 0x14BBu
+#define LINK_VAN_FIX2 0x144Fu
+#define LINK_VAN_FIX6 0x7D46u
+#define LINK_VAN_FIX8 0x2ABBu
+
 /* Which kTunics ramp the row wears, or -1 when it is not Link's palette. */
 static int MatchTunic(const uint16_t* row) {
+    if (row[LINK_IDX_FIX1] != LINK_VAN_FIX1 || row[LINK_IDX_FIX2] != LINK_VAN_FIX2 ||
+        row[LINK_IDX_FIX6] != LINK_VAN_FIX6 || row[LINK_IDX_FIX8] != LINK_VAN_FIX8)
+        return -1;
     for (int i = 0; i < 6; ++i) {
         if (row[LINK_IDX_MAIN] == kTunics[i][0] && row[LINK_IDX_DARK] == kTunics[i][1] &&
             row[LINK_IDX_DARKEST] == kTunics[i][2] && row[LINK_IDX_LIGHT] == kTunics[i][3])
