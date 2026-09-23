@@ -36,4 +36,12 @@ int Port_Audio_GetReverbLevel(void);
 void Port_Audio_SetMasterVolume(float volume);
 float Port_Audio_GetMasterVolume(void);
 
+/* Music and sound-effect volumes [0,1], 1.0 = unchanged (default). Music is
+ * the BGM player, sound effects every other player (jingles included); both
+ * sit underneath the master volume. Persisted via the port config. */
+void Port_Audio_SetMusicVolume(float volume);
+float Port_Audio_GetMusicVolume(void);
+void Port_Audio_SetSfxVolume(float volume);
+float Port_Audio_GetSfxVolume(void);
+
 #endif

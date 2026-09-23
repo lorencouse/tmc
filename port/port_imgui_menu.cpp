@@ -619,6 +619,10 @@ void Port_Audio_SetReverbLevel(int level);
 int Port_Audio_GetReverbLevel(void);
 void Port_Audio_SetMasterVolume(float volume);
 float Port_Audio_GetMasterVolume(void);
+void Port_Audio_SetMusicVolume(float volume);
+float Port_Audio_GetMusicVolume(void);
+void Port_Audio_SetSfxVolume(float volume);
+float Port_Audio_GetSfxVolume(void);
 
 int Port_QuickSave_SaveSlot(int slot);
 int Port_QuickSave_LoadSlot(int slot);
@@ -3829,6 +3833,29 @@ static void DrawRibbonAudioTab(void) {
         RandoUi_HelpTooltip("Scales the final mixed game audio. 100% = unchanged. Persists "
                             "across launches. Leave at 100% for a faithful level match when "
                             "A/B-testing against hardware in GBA-accurate mode.");
+
+        /* Music / sound effects - per-category levels underneath the master
+         * volume (see kBgmPlayerIndex in port_m4a_backend.cpp for the split). */
+        float music = Port_Audio_GetMusicVolume() * 100.0f;
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::SliderFloat("Music", &music, 0.0f, 100.0f, "%.0f%%")) {
+            float v = music / 100.0f;
+            Port_Audio_SetMusicVolume(v);
+            Port_Config_SetMusicVolume(v);
+        }
+        RandoUi_HelpTooltip("Background music level, applied before the master volume. "
+                            "100% = unchanged. Persists across launches.");
+
+        float sfx = Port_Audio_GetSfxVolume() * 100.0f;
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::SliderFloat("Sound effects", &sfx, 0.0f, 100.0f, "%.0f%%")) {
+            float v = sfx / 100.0f;
+            Port_Audio_SetSfxVolume(v);
+            Port_Config_SetSfxVolume(v);
+        }
+        RandoUi_HelpTooltip("Sound effects, voices and jingles (item-get fanfare included), "
+                            "applied before the master volume. 100% = unchanged. Persists "
+                            "across launches.");
         ImGui::Separator();
     }
 

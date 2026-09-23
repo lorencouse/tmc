@@ -192,6 +192,8 @@ bool sRibbonCfg = true;        /* F8 menu style: ribbon (true) vs classic */
 int sConsoleUiMode = 0;
 bool sMenuHintSeen = false;    /* set once the F8/settings menu is first opened */
 float sMasterVolume = 1.0f;    /* game master volume [0,1]; 1.0 = unchanged */
+float sMusicVolume = 1.0f;     /* music (BGM player) volume [0,1] */
+float sSfxVolume = 1.0f;       /* sound-effect volume [0,1] */
 bool sHoldAdvanceText = false; /* hold an advance key to keep paging text */
 bool sRollAttackMacroEnabled = true;
 /* Select + soft_x / soft_y open the save-state picker (save / load page) in
@@ -375,6 +377,8 @@ const FloatCfg kFloatCfg[] = {
     { "practice_slowmo", &sPracticeSlowmo, 1.0 },
     { "lcd_persistence_rho", &sLcdPersistRho, 0.35 },
     { "master_volume", &sMasterVolume, 1.0 },
+    { "music_volume", &sMusicVolume, 1.0 },
+    { "sfx_volume", &sSfxVolume, 1.0 },
     { "analog_deadzone", &sAnalogDeadzone, 0.30 },
     { "fast_forward_speed", &sFastForwardSpeed, 0.0 },
 };
@@ -2070,6 +2074,30 @@ extern "C" void Port_Config_SetMasterVolume(float v) {
         v = 1.0f;
     sMasterVolume = v;
     sConfigJson["master_volume"] = (double)v;
+    SaveConfig();
+}
+extern "C" float Port_Config_GetMusicVolume(void) {
+    return sMusicVolume;
+}
+extern "C" void Port_Config_SetMusicVolume(float v) {
+    if (v < 0.0f)
+        v = 0.0f;
+    if (v > 1.0f)
+        v = 1.0f;
+    sMusicVolume = v;
+    sConfigJson["music_volume"] = (double)v;
+    SaveConfig();
+}
+extern "C" float Port_Config_GetSfxVolume(void) {
+    return sSfxVolume;
+}
+extern "C" void Port_Config_SetSfxVolume(float v) {
+    if (v < 0.0f)
+        v = 0.0f;
+    if (v > 1.0f)
+        v = 1.0f;
+    sSfxVolume = v;
+    sConfigJson["sfx_volume"] = (double)v;
     SaveConfig();
 }
 extern "C" bool Port_Config_GetFullscreen(void) {
