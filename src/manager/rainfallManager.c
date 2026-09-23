@@ -10,6 +10,7 @@
 #include "enemy.h"
 #if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
 extern int Port_Widescreen_EffectiveViewWidth(void);
+extern int Port_Widescreen_EffectiveViewHeight(void);
 #endif
 
 void RainfallManager_Init(RainfallManager*);
@@ -44,10 +45,13 @@ void RainfallManager_Action1(RainfallManager* this) {
              * the pitch with the live view width. Identical at 240. */
             waterDrop->x.HALF.HI = gRoomControls.scroll_x + 0x14 +
                                    (Random() & 7) * ((Port_Widescreen_EffectiveViewWidth() + 0x50) / 8);
+            /* Same for the 4 rows around the view's middle. */
+            waterDrop->y.HALF.HI = gRoomControls.scroll_y + Port_Widescreen_EffectiveViewHeight() / 2 +
+                                   gUnk_08108C7C[Random() & 3] * Port_Widescreen_EffectiveViewHeight() / 160;
 #else
             waterDrop->x.HALF.HI = gRoomControls.scroll_x + 0x78 + gUnk_08108C6C[Random() & 7];
-#endif
             waterDrop->y.HALF.HI = gRoomControls.scroll_y + 0x50 + gUnk_08108C7C[Random() & 3];
+#endif
             waterDrop->z.HALF.HI = 0xff38;
         }
     }

@@ -21,6 +21,20 @@
 #include "fade.h"
 #include "area.h"
 
+/* Children spawn just past the edge of the view, however large it is. */
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+extern int Port_Widescreen_EffectiveViewWidth(void);
+#define WS_VIEW_W ((s32)Port_Widescreen_EffectiveViewWidth())
+#else
+#define WS_VIEW_W 240
+#endif
+#if defined(MODE1_GBA_WIDTH) && (MODE1_GBA_WIDTH > 240)
+extern int Port_Widescreen_EffectiveViewHeight(void);
+#define WS_VIEW_H ((s32)Port_Widescreen_EffectiveViewHeight())
+#else
+#define WS_VIEW_H 160
+#endif
+
 struct GyorgChildSpawns {
     s16 offsetX;
     s16 offsetY;
@@ -497,12 +511,12 @@ void GyorgBossObject_SpawnChildren(u32 unk0, bool32 fromBlue, u32 animationState
                     tmp->attackOffsetY = -p->offsetY;
                     break;
                 case 1:
-                    tmp->attackOffsetX = p->offsetY + DISPLAY_WIDTH;
+                    tmp->attackOffsetX = p->offsetY + WS_VIEW_W;
                     tmp->attackOffsetY = p->offsetX;
                     break;
                 case 2:
                     tmp->attackOffsetX = p->offsetX;
-                    tmp->attackOffsetY = p->offsetY + DISPLAY_HEIGHT;
+                    tmp->attackOffsetY = p->offsetY + WS_VIEW_H;
                     break;
                 case 3:
                     tmp->attackOffsetX = -p->offsetY;

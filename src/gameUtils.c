@@ -4,6 +4,9 @@
  * @brief Game Utils
  */
 #include "area.h"
+#ifdef PC_PORT
+#include "port_widescreen.h"
+#endif
 #include "backgroundAnimations.h"
 #include "entity.h"
 #include "fade.h"
@@ -596,7 +599,14 @@ void DisplayEzloMessage(void) {
     u32 height;
     u32 idx;
     if (gRoomTransition.hint_height == 0) {
+        #ifdef PC_PORT
+        /* Link in the lower 40% of the view: box at the top, else the bottom. */
+        height = gPlayerEntity.base.y.HALF.HI - gRoomControls.scroll_y > Port_Widescreen_EffectiveViewHeight() * 3 / 5
+                     ? 1
+                     : 13;
+#else
         height = gPlayerEntity.base.y.HALF.HI - gRoomControls.scroll_y > 96 ? 1 : 13;
+#endif
     } else {
         height = gRoomTransition.hint_height;
     }
