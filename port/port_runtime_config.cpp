@@ -193,6 +193,10 @@ int sConsoleUiMode = 0;
 bool sMenuHintSeen = false;    /* set once the F8/settings menu is first opened */
 float sMasterVolume = 1.0f;    /* game master volume [0,1]; 1.0 = unchanged */
 bool sHoldAdvanceText = false; /* hold an advance key to keep paging text */
+bool sInstantText = false;     /* QoL: whole text page at once */
+int sTunicColor = 0;           /* QoL: vanilla-play tunic palette, 0 = vanilla */
+int sHeartColor = 0;           /* QoL: vanilla-play heart palette, 0 = vanilla */
+int sLowHealthBeep = 0;        /* QoL: PORT_LOW_HEALTH_BEEP_* */
 bool sRollAttackMacroEnabled = true;
 /* Select + soft_x / soft_y open the save-state picker (save / load page) in
  * gameplay, and a bare Select is held back until it is clearly not a chord.
@@ -330,6 +334,7 @@ const BoolCfg kBoolCfg[] = {
     { "ribbon_mode", &sRibbonCfg, true },
     { "menu_hint_seen", &sMenuHintSeen, false },
     { "hold_advance_text", &sHoldAdvanceText, false },
+    { "instant_text", &sInstantText, false },
     { "roll_attack_macro", &sRollAttackMacroEnabled, true },
     { "select_state_chords", &sSelectStateChords, false },
     { "fullscreen", &sFullscreen, false },
@@ -358,6 +363,9 @@ const IntCfg kIntCfg[] = {
     { "savestate_slot", &sSaveStateSlot, 0 },
     { "fast_forward_fps", &sFastForwardFps, 60 },
     { "console_ui", &sConsoleUiMode, 0 },
+    { "tunic_color", &sTunicColor, 0 },
+    { "heart_color", &sHeartColor, 0 },
+    { "low_health_beep", &sLowHealthBeep, 0 },
 };
 const StrCfg kStrCfg[] = {
     { "upscale_method", &sUpscaleMethod, "nearest" },
@@ -2047,6 +2055,42 @@ extern "C" bool Port_Config_GetHoldToAdvanceText(void) {
 extern "C" void Port_Config_SetHoldToAdvanceText(bool on) {
     sHoldAdvanceText = on;
     sConfigJson["hold_advance_text"] = on;
+    SaveConfig();
+}
+extern "C" bool Port_Config_GetInstantText(void) {
+    return sInstantText;
+}
+extern "C" void Port_Config_SetInstantText(bool on) {
+    sInstantText = on;
+    sConfigJson["instant_text"] = on;
+    SaveConfig();
+}
+/* Hand-edited config can hold anything; 0..hi or back to the default 0. */
+static int ClampChoice(int v, int hi) {
+    return (v < 0 || v > hi) ? 0 : v;
+}
+extern "C" int Port_Config_GetTunicColor(void) {
+    return ClampChoice(sTunicColor, 5);
+}
+extern "C" void Port_Config_SetTunicColor(int color) {
+    sTunicColor = ClampChoice(color, 5);
+    sConfigJson["tunic_color"] = sTunicColor;
+    SaveConfig();
+}
+extern "C" int Port_Config_GetHeartColor(void) {
+    return ClampChoice(sHeartColor, 5);
+}
+extern "C" void Port_Config_SetHeartColor(int color) {
+    sHeartColor = ClampChoice(color, 5);
+    sConfigJson["heart_color"] = sHeartColor;
+    SaveConfig();
+}
+extern "C" int Port_Config_GetLowHealthBeep(void) {
+    return ClampChoice(sLowHealthBeep, PORT_LOW_HEALTH_BEEP_OFF);
+}
+extern "C" void Port_Config_SetLowHealthBeep(int mode) {
+    sLowHealthBeep = ClampChoice(mode, PORT_LOW_HEALTH_BEEP_OFF);
+    sConfigJson["low_health_beep"] = sLowHealthBeep;
     SaveConfig();
 }
 extern "C" bool Port_Config_GetSelectStateChords(void) {
