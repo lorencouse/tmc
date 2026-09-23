@@ -655,8 +655,13 @@ static void Port_PumpEvents(void) {
                  * the second button's down-edge; Select is not consumed so
                  * repeated taps (e.g. frame-advance) work while held. Start is
                  * excluded — that pair is the menu toggle. */
-                if (is_down && s_select_held && e.gbutton.button != SDL_GAMEPAD_BUTTON_BACK &&
-                    e.gbutton.button != SDL_GAMEPAD_BUTTON_START) {
+                /* Off under select_state_chords: there Select + X/Y is the
+                 * save-state picker and Select + A/B assigns soft slots in the
+                 * pause menu, and these read the raw pad alongside the
+                 * gptokeyb2 keys, so Select + X also froze the game in a
+                 * practice pause behind the picker. */
+                if (is_down && s_select_held && !Port_Config_GetSelectStateChords() &&
+                    e.gbutton.button != SDL_GAMEPAD_BUTTON_BACK && e.gbutton.button != SDL_GAMEPAD_BUTTON_START) {
                     switch (e.gbutton.button) {
                         case SDL_GAMEPAD_BUTTON_SOUTH: /* A: reload point */
                             Port_DebugMenu_ToastFromExternal(Port_Practice_LoadPoint() ? "Practice point loaded"
