@@ -12,6 +12,14 @@
 #include "room.h"
 #include "screen.h"
 #include "physics.h"
+#ifdef PC_PORT
+#include "port_hdma.h"
+#include "port_widescreen.h"
+/* The tall view draws more than 160 lines; fill the table for all of them. */
+#define HBLANK_LINES Port_Widescreen_EffectiveViewHeight()
+#else
+#define HBLANK_LINES 0xa0
+#endif
 
 void sub_0805D9D8(VaatiAppearingManager*);
 void VaatiAppearingManager_Action3(VaatiAppearingManager*);
@@ -183,13 +191,16 @@ void sub_0805D9D8(VaatiAppearingManager* this) {
 void sub_0805DA08(u32 x, u32 y, u32 param_3) {
     u32 i;
     struct BgAffineDstData* affineDstData = &((struct BgAffineDstData*)gUnk_02017AA0)[gUnk_03003DE4[0] * 0xa0];
-    for (i = 0; i < 0xa0; ++i, y += 0x17) {
+    for (i = 0; i < HBLANK_LINES; ++i, y += 0x17) {
         affineDstData->pa = ((gSineTable[(param_3 + i + y) & 0xff] * x) >> 8) + gScreen.bg3.xOffset;
         affineDstData = (struct BgAffineDstData*)&affineDstData->pb;
     }
     SetVBlankDMA((u16*)&gUnk_02017AA0[gUnk_03003DE4[0] * 0xa0], (u16*)REG_ADDR_BG3HOFS,
                  ((DMA_ENABLE | DMA_START_HBLANK | DMA_16BIT | DMA_REPEAT | DMA_SRC_INC | DMA_DEST_RELOAD) << 16) +
                      0x1);
+#ifdef PC_PORT
+    port_hdma_set_table_lines(HBLANK_LINES);
+#endif
 }
 
 void CreateVaatiApparateManager(VaatiAppearingManager* this, u32 type) {

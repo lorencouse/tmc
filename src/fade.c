@@ -7,6 +7,7 @@
 #ifdef PC_PORT
 #include "port_gba_mem.h"
 #include "port_rom.h"
+#include "port_widescreen.h"
 #include <stdio.h>
 #endif
 
@@ -180,6 +181,25 @@ void SetFadeProgress(u32 arg0) {
     }
 }
 
+#ifdef PC_PORT
+/* The iris runs 0..150, the radius that clears a 240x160 screen's corners.
+ * Scale it by the frame's diagonal so a wider or taller view opens and
+ * closes fully instead of popping its corners. */
+static u32 IrisRadius(u32 size) {
+    s32 w = Port_Widescreen_EffectiveViewWidth();
+    s32 h = Port_Widescreen_EffectiveViewHeight();
+    s32 diag2 = w * w + h * h;
+    s32 d = 288; /* ~sqrt(240^2 + 160^2) */
+    while (d * d < diag2) {
+        d++;
+    }
+    return size * (u32)d / 288;
+}
+#define IRIS_RADIUS(size) IrisRadius(size)
+#else
+#define IRIS_RADIUS(size) (size)
+#endif
+
 void SetFade(u32 type, u32 speed) {
 #ifdef PC_PORT
     {
@@ -205,7 +225,7 @@ void SetFade(u32 type, u32 speed) {
     }
     if (type & FADE_IRIS) {
         sub_0801E1B8(gFadeControl.win_inside_cnt, gFadeControl.win_outside_cnt);
-        sub_0801E1EC(gFadeControl.iris_x, gFadeControl.iris_y, gFadeControl.iris_size);
+        sub_0801E1EC(gFadeControl.iris_x, gFadeControl.iris_y, IRIS_RADIUS(gFadeControl.iris_size));
         if ((type & FADE_IN_OUT) == 0) {
             gFadeControl.type &= ~FADE_INSTANT;
             ResetFadeMask();
@@ -330,12 +350,12 @@ static u32 sub_080502A4(FadeControl* ctl) {
         gFadeControl.iris_size -= gFadeControl.speed;
         if (delta << 16 <= 0)
             gFadeControl.iris_size = 0;
-        sub_0801E1EC(gFadeControl.iris_x, gFadeControl.iris_y, gFadeControl.iris_size);
+        sub_0801E1EC(gFadeControl.iris_x, gFadeControl.iris_y, IRIS_RADIUS(gFadeControl.iris_size));
         if (!gFadeControl.iris_size)
             return 0;
     } else {
         gFadeControl.iris_size += gFadeControl.speed;
-        sub_0801E1EC(gFadeControl.iris_x, gFadeControl.iris_y, gFadeControl.iris_size);
+        sub_0801E1EC(gFadeControl.iris_x, gFadeControl.iris_y, IRIS_RADIUS(gFadeControl.iris_size));
         if (gFadeControl.iris_size > 150) {
             sub_0801E104();
             return 0;

@@ -11,6 +11,14 @@
 #include "room.h"
 #include "screen.h"
 #include "game.h"
+#ifdef PC_PORT
+#include "port_hdma.h"
+#include "port_widescreen.h"
+/* The tall view draws more than 160 lines; fill the table for all of them. */
+#define HBLANK_LINES Port_Widescreen_EffectiveViewHeight()
+#else
+#define HBLANK_LINES 0xa0
+#endif
 
 const u16 gUnk_08108588[] = { 0x1000, 0xF01, 0xE02, 0xD03, 0xC04, 0xB05, 0xA06, 0x907, 0x808 };
 
@@ -155,7 +163,7 @@ void SteamOverlayManager_Action3(SteamOverlayManager* this) {
 void sub_0805A114(u32 unk0, u32 unk1) {
     s32 i;
     u16* p = &gUnk_02017AA0[gUnk_03003DE4[0] * 0x500];
-    for (i = 0; i < 0xA0; i++) {
+    for (i = 0; i < HBLANK_LINES; i++) {
         s32 tmp = i + gScreen.bg3.yOffset;
         switch ((tmp >> 3) & 7) {
             case 4:
@@ -177,6 +185,9 @@ void sub_0805A114(u32 unk0, u32 unk1) {
     SetVBlankDMA((u16*)&gUnk_02017AA0[gUnk_03003DE4[0] * 0x500], (u16*)REG_ADDR_BG3HOFS,
                  ((DMA_ENABLE | DMA_START_HBLANK | DMA_16BIT | DMA_REPEAT | DMA_SRC_INC | DMA_DEST_RELOAD) << 16) +
                      0x1);
+#ifdef PC_PORT
+    port_hdma_set_table_lines(HBLANK_LINES);
+#endif
 }
 
 void sub_0805A1D8(SteamOverlayManager* this) {

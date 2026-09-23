@@ -41,6 +41,8 @@ int virtuappu_mode1_ws_msg_y1 = 0;
 uint16_t* virtuappu_mode1_tall_shadow[MODE1_GBA_BG_COUNT] = { NULL, NULL, NULL, NULL };
 int16_t virtuappu_mode1_obj_y_full[MODE1_GBA_OAM_COUNT];
 int virtuappu_mode1_tall_hud_split = 0;
+int virtuappu_mode1_bg_stretch[MODE1_GBA_BG_COUNT] = { 0, 0, 0, 0 };
+const int16_t (*virtuappu_mode1_win0_spans)[2] = NULL;
 
 typedef struct Mode1OAMAttr {
     uint16_t attr0;
@@ -452,6 +454,25 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
             return;
         }
     }
+    /* Screen-sized canvas: sample the native 240x160 picture scaled to cover
+     * the frame at its own aspect, centred, cropping the axis that overflows
+     * (rows here, columns in the stretch loop below). */
+    const bool stretch = virtuappu_mode1_bg_stretch[bg_index] &&
+                         (mode1_frame_width > MODE1_GBA_BG_CLIP_X || mode1_frame_height > MODE1_GBA_HEIGHT);
+    int stretch_num = 1, stretch_den = 1, stretch_x0 = 0;
+    if (stretch) {
+        if (mode1_frame_width * MODE1_GBA_HEIGHT >= mode1_frame_height * MODE1_GBA_BG_CLIP_X) {
+            stretch_num = MODE1_GBA_BG_CLIP_X;
+            stretch_den = mode1_frame_width;
+            line = line * stretch_num / stretch_den +
+                   (MODE1_GBA_HEIGHT - mode1_frame_height * stretch_num / stretch_den) / 2;
+        } else {
+            stretch_num = MODE1_GBA_HEIGHT;
+            stretch_den = mode1_frame_height;
+            line = line * stretch_num / stretch_den;
+            stretch_x0 = (MODE1_GBA_BG_CLIP_X - mode1_frame_width * stretch_num / stretch_den) / 2;
+        }
+    }
     uint16_t bgcnt = virtuappu_mode1_io_read16((uint16_t)(MODE1_IO_BG0CNT + bg_index * 2));
     uint8_t priority = (uint8_t)(bgcnt & 3u);
     uint32_t char_base = (uint32_t)((bgcnt >> 2u) & 3u) * 0x4000u;
@@ -512,7 +533,7 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
     const int ws_msg_x0 = virtuappu_mode1_ws_msg_x0;
     const int ws_msg_x1 = virtuappu_mode1_ws_msg_x1;
 
-    if (ws_hud_right_anchor || ws_msg_line) {
+    if (ws_hud_right_anchor || ws_msg_line || stretch) {
         render_max_x = frame_width;
     }
     /* N64 perf: the tilemap screen-entry read + its address math are constant
@@ -603,7 +624,11 @@ void virtuappu_mode1_render_text_bg_line(int bg_index, int line, uint32_t* line_
         }                                                                                                              \
     } while (0)
 
-    if (!ws_msg_line && !ws_hud_right_anchor) {
+    if (stretch) {
+        for (x = 0; x < render_max_x; ++x) {
+            MODE1_BG_PIXEL(x * stretch_num / stretch_den + stretch_x0);
+        }
+    } else if (!ws_msg_line && !ws_hud_right_anchor) {
         /* Fast path: no widescreen column remap, so sample_x == x. Hoists the
          * per-pixel remap dispatch (its two flags are per-line invariants) out
          * of the hot loop entirely — A53 win, zero added per-pixel branch. */
@@ -944,6 +969,10 @@ void virtuappu_mode1_composite_line(int line, uint32_t bg_layers[MODE1_GBA_BG_CO
         evy = 16;
     }
 
+    if (virtuappu_mode1_win0_spans != NULL && line < MODE1_MAX_FRAME_HEIGHT) {
+        win0_left = virtuappu_mode1_win0_spans[line > 0 ? line - 1 : 0][0];
+        win0_right = virtuappu_mode1_win0_spans[line > 0 ? line - 1 : 0][1];
+    }
     if (win0_right > frame_width) {
         win0_right = frame_width;
     }
@@ -1534,11 +1563,10 @@ void virtuappu_mode1_render_frame(const PPUMemory* ppu) {
     const bool per_line_io = (virtuappu_mode1_pre_line_callback != NULL);
     for (line = 0; line < frame_height; ++line) {
         if (per_line_io) {
-            /* HBlank tables hold 160 lines; tall-view lines past them keep
-             * the last line's registers instead of walking off the table. */
-            if (line < MODE1_GBA_HEIGHT) {
-                virtuappu_mode1_pre_line_callback(line);
-            }
+            /* Tall view: the callback also runs for lines past 160. It
+             * knows how many lines each HBlank table holds and leaves the
+             * registers alone past that (port_hdma_step_line). */
+            virtuappu_mode1_pre_line_callback(line);
             memcpy(io_snapshots[line], mode1_memory.io_mem, MODE1_IO_MEM_SIZE);
             per_line_dispcnt[line] =
 #ifdef TMC_N64

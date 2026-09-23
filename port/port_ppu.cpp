@@ -1239,6 +1239,14 @@ static bool Port_PPU_TryGpuRaster(void) {
     if (virtuappu_registers.frame_height > MODE1_GBA_HEIGHT) {
         return false; /* tall view (tall shadow, full OAM y) is CPU-only */
     }
+    for (int i = 0; i < MODE1_GBA_BG_COUNT; ++i) {
+        if (virtuappu_mode1_bg_stretch[i]) {
+            return false; /* stretched screen-sized canvas is CPU-only */
+        }
+    }
+    if (virtuappu_mode1_win0_spans != nullptr) {
+        return false; /* frame-resolution WIN0 spans are CPU-only */
+    }
     static int perfcap = -1;
     if (perfcap < 0) {
         const char* e = getenv("TMC_PERFCAP");
@@ -1439,6 +1447,7 @@ extern "C" void Port_PPU_PresentFrame(void) {
      * channel is active. Affine BG rendering treats BG2X/BG2Y differently
      * when HDMA has already supplied per-line reference points. */
     virtuappu_mode1_pre_line_callback = port_hdma_has_active_channels() ? port_hdma_step_line : nullptr;
+    virtuappu_mode1_win0_spans = port_hdma_win0_spans();
 
     /* Affine reference write strobes: a per-line HDMA write to BG2X/BG2Y
      * must reload the internal latch even when it writes the SAME value

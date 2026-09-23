@@ -18,6 +18,7 @@
 #include "main.h"
 #include "map.h"
 #include "manager/diggingCaveEntranceManager.h"
+#include "manager/lightRayManager.h"
 #include "menu.h"
 #include "message.h"
 #include "npc.h"
@@ -1415,11 +1416,22 @@ static int Port_WidescreenPpuBgForControl(u32 control) {
     return -1;
 }
 
+/* LightRayManager's screen-pinned mode (state 4, sub_08057450: BG3 at a
+ * fixed x of 16, sliding only vertically) and its fade-out (state 3). States
+ * 1 and 2 are the drifting ray texture, which wraps like fog. */
+static int Port_LightRayCanvasActive(void) {
+    if (gScreen.bg3.control != 0x1e04 || !(gScreen.lcd.displayControl & DISPCNT_BG3_ON))
+        return 0;
+    LightRayManager* m = (LightRayManager*)DeepFindEntityByID(MANAGER, LIGHT_RAY_MANAGER);
+    return m != NULL && (m->unk_21 == 3 || m->unk_21 == 4);
+}
+
 /* Called per-VBlank from src/interrupts.c::UpdateDisplayControls. */
 void Port_Widescreen_UpdateShadows(void) {
     for (int i = 0; i < MODE1_GBA_BG_COUNT; i++) {
         virtuappu_mode1_ws_shadow[i] = NULL;
         virtuappu_mode1_tall_shadow[i] = NULL;
+        virtuappu_mode1_bg_stretch[i] = 0;
     }
     virtuappu_mode1_tall_hud_split = 0;
     virtuappu_mode1_ws_hud_right_anchor = 0;
@@ -1512,13 +1524,46 @@ void Port_Widescreen_UpdateShadows(void) {
         }
         virtuappu_mode1_tall_hud_split = 1;
     }
+    /* The Minish Woods sunshine (and the barrel house's) is a 240x160
+     * picture pinned to the screen, not a texture: wrapping it leaves the
+     * right edge and the bottom empty. Stretch it to the frame instead. */
+    if (Port_LightRayCanvasActive()) {
+        virtuappu_mode1_bg_stretch[3] = 1;
+    }
     /* Extend known repeating overlays only; other BG3 canvases stay native.
      * CloudOverlayManager uses priority 1; Woods and steam use priority 0. */
-    if (((gRoomControls.area == AREA_MINISH_WOODS && gScreen.bg3.control == 0x1e04) ||
+    else if (((gRoomControls.area == AREA_MINISH_WOODS && gScreen.bg3.control == 0x1e04) ||
          (gRoomControls.area == AREA_HYRULE_FIELD && gScreen.bg3.control == 0x1e05) ||
          (gRoomControls.area == AREA_CAVE_OF_FLAMES && gScreen.bg3.control == 0x1e04)) &&
         (gScreen.lcd.displayControl & DISPCNT_BG3_ON) && virtuappu_mode1_ws_shadow[3] == NULL) {
         Port_WidescreenShadow_PopulateOverlay((const u16*)(gVram + 0xf000), sWsShadowOverlay);
+    }
+    /* Tall view: any other 256x256 BG (parallax skies, boss-room and cutscene
+     * backdrops) holds no pixels past x=240 and only the rest of its canvas
+     * below line 160, which drew an L of backdrop around the picture. Show
+     * the GBA's view of it scaled to the frame instead. BG0 is the HUD. */
+    if (Port_Widescreen_EffectiveViewHeight() > 160) {
+        const u32 controls[] = { gScreen.bg0.control, gScreen.bg1.control, gScreen.bg2.control,
+                                 gScreen.bg3.control };
+        for (int i = 1; i < MODE1_GBA_BG_COUNT; i++) {
+            if ((gScreen.lcd.displayControl & (DISPCNT_BG0_ON << i)) && (controls[i] >> 14) == 0 &&
+                virtuappu_mode1_ws_shadow[i] == NULL && virtuappu_mode1_tall_shadow[i] == NULL) {
+                virtuappu_mode1_bg_stretch[i] = 1;
+            }
+        }
+    }
+    if (getenv("TMC_WS_TRACE") != NULL) {
+        static int sLastStretch = -1;
+        int mask = 0;
+        for (int i = 0; i < MODE1_GBA_BG_COUNT; i++) {
+            mask |= virtuappu_mode1_bg_stretch[i] ? 1 << i : 0;
+        }
+        if (mask != sLastStretch) {
+            sLastStretch = mask;
+            fprintf(stderr, "[ws] area=0x%02x room=0x%02x stretch=0x%x bg1=%04x bg2=%04x bg3=%04x\n",
+                    (unsigned)gRoomControls.area, (unsigned)gRoomControls.room, (unsigned)mask,
+                    (unsigned)gScreen.bg1.control, (unsigned)gScreen.bg2.control, (unsigned)gScreen.bg3.control);
+        }
     }
 }
 #else

@@ -20,6 +20,7 @@ static int virtuappu_mode1_ws_shadow_base_tile[4];
 static u16* virtuappu_mode1_ws_shadow[4];
 static u16* virtuappu_mode1_tall_shadow[4];
 static int virtuappu_mode1_tall_hud_split;
+static int virtuappu_mode1_bg_stretch[4];
 static u16 sTallShadowBottom[MODE1_TALL_SHADOW_ROWS * MODE1_TALL_SHADOW_COLS];
 static u16 sTallShadowTop[MODE1_TALL_SHADOW_ROWS * MODE1_TALL_SHADOW_COLS];
 static int tallH = 160;
@@ -36,8 +37,9 @@ static int Port_Widescreen_EffectiveViewWidth(void) { return Port_Widescreen_Fal
 /* Only unrelated task/HUD dependencies are stubbed; shadow publication runs
  * the production UpdateShadows body, including its area and BG gates. */
 enum { TASK_GAME = 2, AREA_MINISH_WOODS = 0x0b, AREA_HYRULE_FIELD = 0x0a,
-       AREA_CAVE_OF_FLAMES = 0x60, MANAGER = 9, ENTER_ROOM_TEXTBOX_MANAGER = 1 };
+       AREA_CAVE_OF_FLAMES = 0x60, MANAGER = 9, ENTER_ROOM_TEXTBOX_MANAGER = 1, LIGHT_RAY_MANAGER = 1 };
 #define MODE1_GBA_BG_COUNT 4
+#define DISPCNT_BG0_ON 0x100
 #define DISPCNT_BG3_ON 0x800
 static struct { int task; } gMain;
 typedef struct { u32 control; int yOffset; } TestBg;
@@ -56,6 +58,12 @@ static int Port_Widescreen_EffectiveViewHeight(void) { return Port_Widescreen_Is
 static int Port_Widescreen_HudRightAnchor(void) { return 0; }
 typedef struct { int action; } Entity;
 static Entity* FindEntityByID(int kind, int id, int list) { (void)kind; (void)id; (void)list; return NULL; }
+typedef struct { Entity base; int unk_21; } LightRayManager;
+static LightRayManager sLightRay;
+static int sLightRayPresent;
+static Entity* DeepFindEntityByID(int kind, int id) {
+    return (kind == MANAGER && id == LIGHT_RAY_MANAGER && sLightRayPresent) ? &sLightRay.base : NULL;
+}
 #include "widescreen_helpers.h"
 static int errors;
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #cond); ++errors; } } while (0)
@@ -143,6 +151,27 @@ int main(void) {
         if (overlays[i].expected && virtuappu_mode1_ws_shadow[3])
             CHECK(memcmp(virtuappu_mode1_ws_shadow[3], screen, sizeof(screen)) == 0);
     }
+    /* LightRayManager: the drifting ray texture (states 1-2) wraps like fog;
+     * the screen-pinned sunshine (state 4, fading out in 3) is stretched. */
+    gRoomControls.area = AREA_MINISH_WOODS;
+    gScreen.bg3.control = 0x1e04;
+    gScreen.lcd.displayControl = DISPCNT_BG3_ON;
+    enabled = 1;
+    sLightRayPresent = 1;
+    for (int state = 0; state <= 4; ++state) {
+        int pinned = state == 3 || state == 4;
+        sLightRay.unk_21 = state;
+        Port_Widescreen_UpdateShadows();
+        CHECK(virtuappu_mode1_bg_stretch[3] == pinned);
+        CHECK((virtuappu_mode1_ws_shadow[3] != NULL) == !pinned);
+    }
+    gRoomControls.area = 0; /* the barrel house: stretched in any area */
+    sLightRay.unk_21 = 4;
+    Port_Widescreen_UpdateShadows();
+    CHECK(virtuappu_mode1_bg_stretch[3] == 1);
+    sLightRayPresent = 0;
+    Port_Widescreen_UpdateShadows();
+    CHECK(virtuappu_mode1_bg_stretch[3] == 0);
     enabled = 1;
     int x,y,w,h;
     gCurrentWindow.active=0;
@@ -185,6 +214,27 @@ int main(void) {
             }
         }
     }
+    /* Tall view: a 256x256 BG that is neither a map nor a known overlay
+     * (a parallax sky, a boss backdrop) is stretched; maps, 512-wide
+     * canvases, disabled BGs and the 160-line view are not. */
+    gRoomControls.area = 0;
+    gScreen.bg1.control = 0x1c01; gScreen.bg2.control = 0x1d02; gScreen.bg3.control = 0x1e07;
+    gMapBottom.bgSettings = &gScreen.bg2; gMapTop.bgSettings = &gScreen.bg1;
+    gScreen.lcd.displayControl = 0x0e00;
+    Port_Widescreen_UpdateShadows();
+    CHECK(virtuappu_mode1_bg_stretch[3] == 1);
+    CHECK(virtuappu_mode1_bg_stretch[1] == 0 && virtuappu_mode1_bg_stretch[2] == 0);
+    gScreen.bg3.control = 0x5e07;
+    Port_Widescreen_UpdateShadows();
+    CHECK(virtuappu_mode1_bg_stretch[3] == 0);
+    gScreen.bg3.control = 0x1e07; gScreen.lcd.displayControl = 0x0600;
+    Port_Widescreen_UpdateShadows();
+    CHECK(virtuappu_mode1_bg_stretch[3] == 0);
+    gScreen.lcd.displayControl = 0x0e00; tallH = 160;
+    Port_Widescreen_UpdateShadows();
+    CHECK(virtuappu_mode1_bg_stretch[3] == 0);
+    tallH = 240;
+    gMapBottom.bgSettings = NULL; gMapTop.bgSettings = NULL; gScreen.lcd.displayControl = 0;
     gRoomControls.height = 200; gRoomControls.scroll_x = 16; gRoomControls.scroll_y = 32;
     Port_TallShadow_Populate(1, map, sTallShadowBottom);
     CHECK(sTallShadowBottom[(MODE1_TALL_SHADOW_ROWS - 1) * MODE1_TALL_SHADOW_COLS + 3] == 0); /* below the room */

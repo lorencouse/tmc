@@ -302,6 +302,10 @@ void SetVBlankDMA(u16* src, u16* dest, u32 size) {
     gScreen.vBlankDMA.size = size;
     gScreen.vBlankDMA.ready = TRUE;
     gUnk_03003DE4[0] ^= 1;
+#ifdef PC_PORT
+    port_hdma_set_table_lines(160);
+    port_hdma_win0_spans_commit(src, dest == (u16*)REG_ADDR_WIN0H);
+#endif
 }
 
 void DisableVBlankDMA(void) {

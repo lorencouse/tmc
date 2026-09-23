@@ -8,6 +8,7 @@
 #include "port_asset_loader.h"
 #include "port_rom.h"
 #include "port_hdma.h"
+#include "port_widescreen.h"
 #endif
 #include "area.h"
 #include "asm.h"
@@ -1181,6 +1182,14 @@ void sub_0801E290(u32 param_1, u32 param_2, u32 count) {
      * (param_2=0xFFFFFFFF) works. On 64-bit, that produces an invalid address.
      * Use index-based access instead of pointer incrementing. */
     u8* base = ((struct_02017AA0*)gUnk_02017AA0)[gUnk_03003DE4[0]].filler;
+    /* A wider or taller view gets the same circle at full size: right edges
+     * past x=239 and rows past 159, which the 8-bit table below can't hold. */
+    s16(*spans)[2] = NULL;
+    s32 spanW = Port_Widescreen_EffectiveViewWidth();
+    s32 spanH = Port_Widescreen_EffectiveViewHeight();
+    if (spanW > 240 || spanH > 160) {
+        spans = port_hdma_win0_spans_fill(&((struct_02017AA0*)gUnk_02017AA0)[gUnk_03003DE4[0]]);
+    }
     uVar5 = uVar7 = param_2;
     puVar6 = gUnk_02018EE0;
 
@@ -1190,6 +1199,17 @@ void sub_0801E290(u32 param_1, u32 param_2, u32 count) {
         iVar4 = param_1 + uVar1;
         if (iVar2 < 0) {
             iVar2 = 0;
+        }
+        if (spans != NULL) {
+            s16 right = (s16)(iVar4 > spanW ? spanW : iVar4);
+            if ((s32)uVar5 >= 0 && (s32)uVar5 < spanH) {
+                spans[uVar5][0] = (s16)iVar2;
+                spans[uVar5][1] = right;
+            }
+            if ((s32)uVar7 >= 0 && (s32)uVar7 < spanH) {
+                spans[uVar7][0] = (s16)iVar2;
+                spans[uVar7][1] = right;
+            }
         }
         if (iVar4 > 0xef) {
             iVar4 = 0xf0;

@@ -100,6 +100,14 @@ extern int16_t virtuappu_mode1_obj_y_full[MODE1_GBA_OAM_COUNT];
 /* Nonzero while the tall view shows gameplay: BG0 (HUD) lines 80..159 are
  * drawn at the bottom of the frame instead (see render_text_bg_line). */
 extern int virtuappu_mode1_tall_hud_split;
+/* Nonzero for a BG that is a screen-sized 240x160 canvas rather than a map
+ * or a repeating texture (e.g. the Minish Woods sunshine): on a wider or
+ * taller frame it is scaled to fill the frame instead of wrapping. */
+extern int virtuappu_mode1_bg_stretch[MODE1_GBA_BG_COUNT];
+/* Non-NULL: per-line WIN0 [left, right] at frame resolution, used instead of
+ * the HBlank-DMA'd WIN0H (8-bit x, 160 lines) for a wider or taller frame.
+ * Indexed like the HBlank table: line N shows entry N-1, line 0 entry 0. */
+extern const int16_t (*virtuappu_mode1_win0_spans)[2];
 int virtuappu_mode1_frame_height(void);
 
 /* Runtime WIP widescreen HUD anchor. BG0 stays 32 tiles wide, but gameplay
