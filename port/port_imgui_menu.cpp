@@ -618,6 +618,13 @@ extern "C" bool Port_ImGui_HandleGameInputEvent(const SDL_Event* event) {
     return consumed;
 }
 
+/* The classic menu's page stack is built on every open whichever menu is on
+ * screen, and its first page leads with "Items / progress" -> "Unlock all
+ * items", so port_bios.c only hands it keys when it is the one shown. */
+extern "C" bool Port_ImGui_ClassicMenuShown(void) {
+    return !sImGuiInited || (!sRibbonEnabled && !Port_ImGui_ConsoleMode());
+}
+
 /* Release every nav key we may have pressed. A button held as the menu
  * closes never delivers its key-up to the hook (it only runs while the menu
  * is open), which would leave ImGui believing the D-pad is still held and

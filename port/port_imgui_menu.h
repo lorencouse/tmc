@@ -25,6 +25,10 @@ bool Port_ImGui_ConsoleMode(void);
  * Only call while the menu is open. */
 bool Port_ImGui_HandleGameInputEvent(const SDL_Event* event);
 
+/* True when the classic page-stack menu is the one on screen (ribbon off on
+ * a desktop-sized window, or ImGui not running). Only then may it take keys. */
+bool Port_ImGui_ClassicMenuShown(void);
+
 bool Port_ImGui_IsEnabled(void);
 bool Port_ImGui_RibbonEnabled(void);
 void Port_ImGui_SetRibbonEnabled(bool enabled);

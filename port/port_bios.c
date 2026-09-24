@@ -627,7 +627,15 @@ static void Port_PumpEvents(void) {
              * suppress further handling so the game itself doesn't see
              * the keystroke. */
             {
-                if (Port_DebugMenu_IsOpen() && !Port_ImGui_WantsTextInput() && Port_DebugMenu_HandleKey((int)e.key.key)) {
+                /* Only the classic menu takes raw keys. Under the ribbon or the
+                 * console shell its page stack is still built but unseen, and
+                 * a key the ImGui menu leaves alone -- Start arrives as Enter
+                 * on a handheld -- would activate its hidden cursor row: two
+                 * Starts ran "Unlock all items". Escape still closes, as the
+                 * ribbon has no Escape handler of its own. */
+                if (Port_DebugMenu_IsOpen() && !Port_ImGui_WantsTextInput() &&
+                    (Port_ImGui_ClassicMenuShown() || e.key.key == SDLK_ESCAPE) &&
+                    Port_DebugMenu_HandleKey((int)e.key.key)) {
                     continue;
                 }
             }
