@@ -229,7 +229,11 @@ static bool WarpPassTick(unsigned int frame) {
             return true;
         const RandoLocationDef* def = Rando_GetLocationDef((RandoLocationId)next);
         unsigned area = (def->key >> 16) & 0xFF, room = (def->key >> 8) & 0xFF;
+#ifdef MULTI_REGION
         unsigned flag = Port_RemapBaselineLocalFlag(GetFlagBankOffset(area), def->key & 0xFF);
+#else
+        unsigned flag = def->key & 0xFF; /* single-region build: USA ordinals, no remap */
+#endif
         bool here = gRoomControls.area == area && gRoomControls.room == room;
         bool hit = here && RoomHasObjectWithFlag(flag);
         seen++;
