@@ -39,6 +39,12 @@
   launch (marker key `a11y_defaults_v2`). Players who want the cues can
   re-enable "Passive cues" and the individual cues under F8 → Accessibility.
 
+- ROM data tables are read from `baserom.gba` at startup instead of being
+  compiled into the binary (upstream v0.9.4/v0.9.5). EU and JP ROMs get each
+  table located in their own layout (`tools/generate_rom_stubs.py`), fixing
+  wrong title-screen colours and crashes on EU/JP, including the crash in
+  area 0x8A room 2.
+
 - Retail/emulator saves retain their original flag layout. Old PC flag-layout
   migration is now opt-in with `TMC_SAVE_MIGRATE_LEGACY_FLAGS=1`; use it only
   for saves known to come from PC builds through v0.9.0. Migration requires a
