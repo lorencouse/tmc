@@ -88,6 +88,7 @@
 #include "virtuappu.h" /* virtuappu_frame_buffer — slot thumbnails */
 
 #include "fade.h"
+#include "game.h"
 
 #include "port_state_regions.h"
 
@@ -844,8 +845,13 @@ int Port_QuickSave_HasSnapshot(void) {
  * cross-session, so it goes through ResumeFromSnapshot: the save file comes
  * back exactly, and the room is re-entered at the spot the player stood. */
 
+/* Set once a suspend write fails: later quits this session go through the
+ * quit modal instead, so the player can still save in-game. */
+static int sSuspendFailed = 0;
+
 int Port_QuickSave_WillSuspend(void) {
-    return Port_Config_SuspendOnQuit() && !Port_Config_GetConsoleParity() && gMain.task == TASK_GAME;
+    return !sSuspendFailed && Port_Config_SuspendOnQuit() && !Port_Config_GetConsoleParity() &&
+           gMain.task == TASK_GAME && gMain.state == GAMETASK_MAIN;
 }
 
 /* Called from the frame loop's quit path, at a frame boundary. Durable write:
@@ -855,6 +861,7 @@ int Port_QuickSave_Suspend(void) {
         return 0;
     if (!Snapshot_Capture(&sSlots[SUSPEND_SLOT]) || !WriteSlotToDisk(SUSPEND_SLOT, 1)) {
         fprintf(stderr, "[suspend] FAILED to write the suspend state\n");
+        sSuspendFailed = 1;
         return 0;
     }
     fprintf(stderr, "[suspend] suspended at area=%u room=%u\n", gRoomControls.area, gRoomControls.room);

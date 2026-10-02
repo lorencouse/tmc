@@ -970,7 +970,8 @@ void Port_InstallQuitSignalHandler(void) {
  * here. With suspend_on_quit on and gameplay running, the modal is skipped
  * and the suspend state is written on the way out. */
 static void QuitIfRequested(void) {
-    if (sTermSignal) {
+    const bool term = sTermSignal != 0;
+    if (term) {
         sTermSignal = 0;
         if (Port_QuickSave_WillSuspend())
             gQuitRequested = true;
@@ -980,7 +981,13 @@ static void QuitIfRequested(void) {
     if (Port_ImGui_QuitConfirmed())
         gQuitRequested = true;
     if (gQuitRequested) {
-        Port_QuickSave_Suspend();
+        /* A failed suspend write on Exit Game or the window's close button
+         * falls back to the quit modal; SIGTERM exits regardless. */
+        if (Port_QuickSave_WillSuspend() && !Port_QuickSave_Suspend() && !term) {
+            gQuitRequested = false;
+            Port_ImGui_ShowQuitModal();
+            return;
+        }
         exit(0);
     }
 }

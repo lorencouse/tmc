@@ -5555,6 +5555,11 @@ extern "C" void Port_ImGui_RequestQuitModal(void) {
     }
     sQuitModalArmed = true;
 }
+/* Withdraws a confirmed quit and asks instead: the suspend write failed. */
+extern "C" void Port_ImGui_ShowQuitModal(void) {
+    sQuitModalConfirmed = false;
+    sQuitModalArmed = true;
+}
 
 static void DrawQuitModal(void) {
     if (sQuitModalArmed) {
