@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Accessibility passive cues (enemy radar, footsteps, hazard warnings, wall
+  bumps) are off by default; they were heard as random beeping while walking
+  (issue #11). Existing `config.json` files are switched off once on first
+  launch (marker key `a11y_defaults_v2`). Players who want the cues can
+  re-enable "Passive cues" and the individual cues under F8 → Accessibility.
+
 - Retail/emulator saves retain their original flag layout. Old PC flag-layout
   migration is now opt-in with `TMC_SAVE_MIGRATE_LEGACY_FLAGS=1`; use it only
   for saves known to come from PC builds through v0.9.0. Migration requires a

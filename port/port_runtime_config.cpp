@@ -154,11 +154,14 @@ float sTtsPitch = 0.5f;
 float sTtsVolume = 0.8f;
 std::string sTtsVoice;
 std::string sTtsLanguage;
-bool sA11yCues = true;
-bool sA11yFootsteps = true;
-bool sA11yHazards = true;
-bool sA11yRadar = true;
-bool sA11yWalls = true;
+/* Passive audio cues default off (issue #11: heard as random beeping).
+ * Port_Config_Load turns them off once in configs saved before this
+ * default changed; see kA11yDefaultsMarker. */
+bool sA11yCues = false;
+bool sA11yFootsteps = false;
+bool sA11yHazards = false;
+bool sA11yRadar = false;
+bool sA11yWalls = false;
 /* Speedrun practice mode (port_practice.c). Overlays default off so normal
  * play stays uncluttered; slow-mo defaults to 1.0 (normal speed). */
 bool sPracticeShowTimer = false;
@@ -318,11 +321,11 @@ const BoolCfg kBoolCfg[] = {
     { "present_thread", &sPresentThread, false },
     { "show_fps", &sShowFps, false },
     { "tts_enabled", &sTtsEnabled, true },
-    { "a11y_cues", &sA11yCues, true },
-    { "a11y_footsteps", &sA11yFootsteps, true },
-    { "a11y_hazards", &sA11yHazards, true },
-    { "a11y_radar", &sA11yRadar, true },
-    { "a11y_walls", &sA11yWalls, true },
+    { "a11y_cues", &sA11yCues, false },
+    { "a11y_footsteps", &sA11yFootsteps, false },
+    { "a11y_hazards", &sA11yHazards, false },
+    { "a11y_radar", &sA11yRadar, false },
+    { "a11y_walls", &sA11yWalls, false },
     { "practice_show_timer", &sPracticeShowTimer, false },
     { "practice_show_inputs", &sPracticeShowInputs, false },
     { "practice_show_history", &sPracticeShowHistory, false },
@@ -399,6 +402,9 @@ const ScaleCfg kScaleCfg[] = {
     { "internal_scale", &sInternalScale, 1, 1, 10 },
 };
 
+/* Present once the a11y-cue defaults flip has been applied to a config. */
+const char* const kA11yDefaultsMarker = "a11y_defaults_v2";
+
 nlohmann::json DefaultsJson(void) {
     nlohmann::json j;
     for (const auto& e : kScaleCfg)
@@ -419,6 +425,7 @@ nlohmann::json DefaultsJson(void) {
     j["bg_fill"] = "blurred";
     j["bg_fill_color"] = { 0, 0, 0 };
     j["render_backend"] = "auto";
+    j[kA11yDefaultsMarker] = true;
     /* reborn_features is intentionally absent — its presence is the signal
      * to override the compile-time feature defaults. */
     j["bindings"] = nlohmann::json::object();
@@ -753,6 +760,15 @@ extern "C" void Port_Config_Load(const char* path) {
         if (!j.is_object()) {
             fprintf(stderr, "[CONFIG] config.json top level is not an object; using defaults.\n");
             j = DefaultsJson();
+        }
+        /* Configs written before the cue defaults flipped saved every cue
+         * as true without the player choosing it. Turn them off once; the
+         * marker keeps a later opt-in from being undone. */
+        if (j.is_object() && !j.contains(kA11yDefaultsMarker)) {
+            for (const char* key : { "a11y_cues", "a11y_footsteps", "a11y_hazards", "a11y_radar", "a11y_walls" })
+                j[key] = false;
+            j[kA11yDefaultsMarker] = true;
+            WriteConfigAtomic(p, j);
         }
     } else {
         WriteConfigAtomic(p, j);
