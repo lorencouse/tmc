@@ -8,10 +8,10 @@
  * rail bytes between them fall into the gaps.
  *
  * On a developer machine those gaps are filled by Port_LoadRom from the full
- * baserom.gba (or extracted rom_data/ pages). On users' release tarballs neither
- * is present at runtime, so the gap bytes stay zero, room-property iterators see
- * NULL rail pointers, and rail-bound entities (lava platforms, moving platforms)
- * don't move. (#36 — Cave-of-Flames Rollobite + BossDoor; same pattern elsewhere.)
+ * baserom.gba. On users' release tarballs it is not present at runtime, so the
+ * gap bytes stay zero, room-property iterators see NULL rail pointers, and
+ * rail-bound entities (lava platforms, moving platforms) don't move. (#36 —
+ * Cave-of-Flames Rollobite + BossDoor; same pattern elsewhere.)
  *
  * The patch location and rail-pointer value are ROM addresses that DIFFER per
  * region, so the fat (multi-region) binary selects the active region's table at

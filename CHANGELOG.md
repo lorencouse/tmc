@@ -13,10 +13,9 @@
 - The game no longer writes `rom_data/` (about 2,800 loose 4 KB copies of ROM
   pages) next to the binary. Those pages are already read from `baserom.gba`,
   which the game requires, and the loose files wasted hundreds of MB of
-  cluster slack on large exFAT SD cards (issue #9). A `rom_data/` left in the
-  working directory by an earlier build is deleted on launch; only its
-  `XXXXXXXX.bin` page files are removed, and the folder only if it is then
-  empty.
+  cluster slack on large exFAT SD cards (issue #9). The game no longer reads
+  `rom_data/` either; a folder left by an earlier build is unused and can be
+  deleted by hand.
 
 - Accessibility passive cues (enemy radar, footsteps, hazard warnings, wall
   bumps) are off by default; they were heard as random beeping while walking

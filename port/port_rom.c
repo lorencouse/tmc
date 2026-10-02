@@ -37,14 +37,12 @@
 #include <mach-o/dyld.h>
 #include <stdlib.h> /* realpath */
 #include <sys/stat.h>
-#include <unistd.h> /* rmdir */
 #elif !defined(TMC_N64)
 #include <dirent.h>
 #include <sys/stat.h>
 /* Forward-declare readlink to avoid pulling in _POSIX_C_SOURCE feature test
  * macros, which the c11 build mode otherwise hides. */
 extern long readlink(const char* path, char* buf, unsigned long bufsiz);
-extern int rmdir(const char* path);
 #endif
 
 #ifdef TMC_N64
@@ -59,7 +57,6 @@ struct dirent {
 DIR* opendir(const char*);
 struct dirent* readdir(DIR*);
 int closedir(DIR*);
-int rmdir(const char*);
 extern long readlink(const char*, char*, unsigned long);
 #endif
 
@@ -178,10 +175,11 @@ const char* Port_FindBaseRomPath(void) {
 /* Earlier builds copied every known ROM region to rom_data/XXXXXXXX.bin. The
  * full baserom.gba is required and is read over those pages on every boot, so
  * the copies were never used, and ~2,800 loose 4 KB files cost hundreds of MB
- * of cluster slack on large exFAT SD cards (issue #9). Pages are now read
- * straight from the loaded ROM and only tracked in memory, which keeps the
- * first-access log in Port_LogRomAccess quiet for regions the port knows. */
-#define ROM_LEGACY_EXTRACT_DIR "rom_data"
+ * of cluster slack on large exFAT SD cards (issue #9). The game no longer
+ * writes or reads rom_data/; an old folder is unused and can be deleted by
+ * hand. Pages are read straight from the loaded ROM and only tracked in
+ * memory, which keeps the first-access log in Port_LogRomAccess quiet for
+ * regions the port knows. */
 #define ROM_PAGE_SHIFT 12
 #define ROM_PAGE_SIZE (1u << ROM_PAGE_SHIFT)              /* 4096 */
 #define ROM_EXPECTED_SIZE 0x1000000u                      /* 16 MB USA ROM */
@@ -206,58 +204,6 @@ static void MarkRegionKnown(u32 rom_offset, u32 size) {
     for (u32 p = first_page; p <= last_page && p < ROM_MAX_PAGES; p++)
         MarkPageKnown(p);
 }
-
-#ifndef TMC_N64
-/* True for exactly the names the old extractor wrote: 8 hex digits + ".bin". */
-static int IsLegacyPageName(const char* name) {
-    for (int i = 0; i < 8; i++) {
-        const char c = name[i];
-        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
-            return 0;
-    }
-    return strcmp(name + 8, ".bin") == 0;
-}
-
-/* Delete a rom_data/ left in the working directory by an earlier build so
- * existing installs get the space back. Only page files the old extractor
- * wrote are removed; the directory goes only if nothing else is left in it. */
-static void RemoveLegacyExtractedPages(void) {
-    int removed = 0;
-#ifdef _WIN32
-    WIN32_FIND_DATAA fd;
-    HANDLE hFind = FindFirstFileA(ROM_LEGACY_EXTRACT_DIR "\\*.bin", &fd);
-    if (hFind == INVALID_HANDLE_VALUE)
-        return;
-    do {
-        if (!IsLegacyPageName(fd.cFileName))
-            continue;
-        char path[64 + MAX_PATH];
-        snprintf(path, sizeof(path), ROM_LEGACY_EXTRACT_DIR "\\%s", fd.cFileName);
-        if (remove(path) == 0)
-            removed++;
-    } while (FindNextFileA(hFind, &fd));
-    FindClose(hFind);
-    _rmdir(ROM_LEGACY_EXTRACT_DIR);
-#else
-    DIR* dirp = opendir(ROM_LEGACY_EXTRACT_DIR);
-    if (!dirp)
-        return;
-    struct dirent* ent;
-    while ((ent = readdir(dirp)) != NULL) {
-        if (!IsLegacyPageName(ent->d_name))
-            continue;
-        char path[64 + sizeof(ent->d_name)];
-        snprintf(path, sizeof(path), ROM_LEGACY_EXTRACT_DIR "/%s", ent->d_name);
-        if (remove(path) == 0)
-            removed++;
-    }
-    closedir(dirp);
-    rmdir(ROM_LEGACY_EXTRACT_DIR);
-#endif
-    if (removed > 0)
-        fprintf(stderr, "ROM data: removed %d unused page files from " ROM_LEGACY_EXTRACT_DIR "/\n", removed);
-}
-#endif
 
 /* ------------------------------------------------------------------ */
 /*  ROM access logging                                                */
@@ -1199,10 +1145,7 @@ void Port_LoadRom(const char* path) {
 #ifndef TMC_N64
     memset(sKnownPages, 0, sizeof(sKnownPages));
 
-    /* ---- Step 1: reclaim space from an old rom_data/ page cache ---- */
-    RemoveLegacyExtractedPages();
-
-    /* ---- Step 2: try ROM files (USA first, then EU) ---- */
+    /* ---- Step 1: try ROM files (USA first, then EU) ---- */
     /*
      * Load a ROM file BEFORE assets so that ALL data regions are filled,
      * including assembled pointer tables (GfxGroups, PaletteGroups, area
@@ -1326,7 +1269,7 @@ void Port_LoadRom(const char* path) {
     }
 #endif
 
-    /* ---- Step 3: auto-detect ROM region ---- */
+    /* ---- Step 2: auto-detect ROM region ---- */
     RomRegion region = Port_DetectRomRegion(gRomData, gRomSize);
     const RomOffsets* R = gRomOffsets;
     if (region == ROM_REGION_UNKNOWN || R == NULL) {
@@ -1370,7 +1313,7 @@ void Port_LoadRom(const char* path) {
     }
 #endif
 
-    /* ---- Step 4: resolve ROM symbols using compile-time tables + gRomData ---- */
+    /* ---- Step 3: resolve ROM symbols using compile-time tables + gRomData ---- */
 
     /* gGlobalGfxAndPalettes — huge palette/gfx blob (still points into gRomData) */
     gGlobalGfxAndPalettes = &gRomData[R->gfxAndPalettes];
