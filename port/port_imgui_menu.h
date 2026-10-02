@@ -35,7 +35,6 @@ void Port_ImGui_SetRibbonEnabled(bool enabled);
 
 bool Port_ImGui_QuitConfirmed(void);
 void Port_ImGui_RequestQuitModal(void);
-void Port_ImGui_ShowQuitModal(void);
 
 bool Port_ImGui_Render(void);
 

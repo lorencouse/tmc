@@ -849,9 +849,15 @@ int Port_QuickSave_HasSnapshot(void) {
  * quit modal instead, so the player can still save in-game. */
 static int sSuspendFailed = 0;
 
+/* Whether a quit asked for now ends in a suspend, once gameplay is settled. */
+int Port_QuickSave_SuspendEnabled(void) {
+    return !sSuspendFailed && Port_Config_SuspendOnQuit() && !Port_Config_GetConsoleParity() && gMain.task == TASK_GAME;
+}
+
+/* Whether the suspend state can be written this frame: not mid room load or
+ * transition, where the player entity and room controls disagree. */
 int Port_QuickSave_WillSuspend(void) {
-    return !sSuspendFailed && Port_Config_SuspendOnQuit() && !Port_Config_GetConsoleParity() &&
-           gMain.task == TASK_GAME && gMain.state == GAMETASK_MAIN &&
+    return Port_QuickSave_SuspendEnabled() && gMain.state == GAMETASK_MAIN &&
            (gMain.substate == GAMEMAIN_UPDATE || gMain.substate == GAMEMAIN_BARRELUPDATE ||
             gMain.substate == GAMEMAIN_SUBTASK);
 }

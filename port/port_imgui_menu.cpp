@@ -1231,7 +1231,8 @@ void SetTask(unsigned int task);
 extern "C" int Port_QuickSave_SaveSlot(int slot);
 extern "C" int Port_QuickSave_AutoOnAreaChangeEnabled(void);
 extern "C" void Port_QuickSave_SetAutoOnAreaChange(int on);
-extern "C" int Port_QuickSave_WillSuspend(void);
+extern "C" int Port_QuickSave_SuspendEnabled(void);
+extern "C" void Port_RequestSuspendQuit(void);
 
 static void DoQuitToTitle(bool saveFirst) {
     if (saveFirst) {
@@ -5549,15 +5550,10 @@ extern "C" void Port_ImGui_RequestQuitModal(void) {
         return;
     /* Nothing to ask with suspend_on_quit on: the quit path writes the
      * suspend state and the next launch resumes it. */
-    if (Port_QuickSave_WillSuspend()) {
-        sQuitModalConfirmed = true;
+    if (Port_QuickSave_SuspendEnabled()) {
+        Port_RequestSuspendQuit();
         return;
     }
-    sQuitModalArmed = true;
-}
-/* Withdraws a confirmed quit and asks instead: the suspend write failed. */
-extern "C" void Port_ImGui_ShowQuitModal(void) {
-    sQuitModalConfirmed = false;
     sQuitModalArmed = true;
 }
 

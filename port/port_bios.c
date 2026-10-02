@@ -38,6 +38,7 @@ extern void Port_QuickSave_CycleSelectedSlot(int direction);
 extern int Port_QuickSave_SaveSelected(void);
 extern int Port_QuickSave_SaveToNewSlot(void);
 extern int Port_QuickSave_LoadSelected(void);
+extern int Port_QuickSave_SuspendEnabled(void);
 extern int Port_QuickSave_WillSuspend(void);
 extern int Port_QuickSave_Suspend(void);
 
@@ -45,6 +46,12 @@ static bool gQuitRequested = false;
 /* Set by SIGTERM (a frontend closing the port, or gptokeyb's quit hotkey);
  * acted on at the next frame boundary by QuitIfRequested. */
 static volatile sig_atomic_t sTermSignal = 0;
+/* A quit that ends in a suspend, waiting for a settled gameplay frame:
+ * Exit Game / the close button (sSuspendQuitPending), or SIGTERM
+ * (sTermAtMs, the tick it arrived; non-zero while pending). */
+static bool sSuspendQuitPending = false;
+static u64 sTermAtMs = 0;
+#define TERM_SUSPEND_WAIT_MS 2000
 static bool sFastForward = false;
 static int sFrameNum = 0;
 
@@ -962,34 +969,45 @@ void Port_InstallQuitSignalHandler(void) {
     signal(SIGTERM, OnTermSignal);
 }
 
+/* Called by Port_ImGui_RequestQuitModal in place of the modal while
+ * suspend_on_quit applies. */
+void Port_RequestSuspendQuit(void) {
+    sSuspendQuitPending = true;
+}
+
 /* The frame loop's only way out, run at a frame boundary.
  *
  * The ImGui quit-confirm modal is rendered once per frame from
  * port_imgui_menu.cpp; when the user picks Save & Quit or Quit Without
  * Saving it sets the confirmed flag, which we promote into gQuitRequested
- * here. With suspend_on_quit on and gameplay running, the modal is skipped
- * and the suspend state is written on the way out. */
+ * here. With suspend_on_quit on and gameplay running, the modal is skipped:
+ * the quit waits for a settled frame (room loads and transitions last a few
+ * frames), writes the suspend state and exits. If gameplay is left first or
+ * the write fails, the modal is shown instead -- except after SIGTERM, which
+ * exits anyway, at the latest TERM_SUSPEND_WAIT_MS after the signal. */
 static void QuitIfRequested(void) {
-    const bool term = sTermSignal != 0;
-    if (term) {
+    if (sTermSignal) {
         sTermSignal = 0;
-        if (Port_QuickSave_WillSuspend())
-            gQuitRequested = true;
-        else
-            Port_ImGui_RequestQuitModal(); /* what SDL's handler led to */
+        if (sTermAtMs == 0)
+            sTermAtMs = SDL_GetTicks() | 1;
+    }
+    if (sSuspendQuitPending || sTermAtMs != 0) {
+        if (Port_QuickSave_WillSuspend()) {
+            if (Port_QuickSave_Suspend() || sTermAtMs != 0)
+                exit(0);
+        } else if (Port_QuickSave_SuspendEnabled()) {
+            if (sTermAtMs == 0 || SDL_GetTicks() - sTermAtMs < TERM_SUSPEND_WAIT_MS)
+                return;
+            exit(0);
+        }
+        sSuspendQuitPending = false;
+        sTermAtMs = 0;
+        Port_ImGui_RequestQuitModal(); /* what SDL's handler led to */
     }
     if (Port_ImGui_QuitConfirmed())
         gQuitRequested = true;
-    if (gQuitRequested) {
-        /* A failed suspend write on Exit Game or the window's close button
-         * falls back to the quit modal; SIGTERM exits regardless. */
-        if (Port_QuickSave_WillSuspend() && !Port_QuickSave_Suspend() && !term) {
-            gQuitRequested = false;
-            Port_ImGui_ShowQuitModal();
-            return;
-        }
+    if (gQuitRequested)
         exit(0);
-    }
 }
 
 void VBlankIntrWait(void) {
