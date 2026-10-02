@@ -3117,7 +3117,20 @@ extern "C" uint16_t Rando_ResolveLocationItem(RandoLocationId location, uint16_t
 static uint8_t sLocationAwardType = 0;
 static uint8_t sLocationAwardSubtype = 0;
 
+/* The last key a reward hook asked about, seed or no seed (headless
+ * harnesses use it to see whether a hook fires). */
+static uint32_t sLastQueriedKey = UINT32_MAX;
+static uint32_t sQueriedKeyCount = 0;
+
+extern "C" uint32_t Rando_LastQueriedLocationKey(uint32_t* count) {
+    if (count != NULL)
+        *count = sQueriedKeyCount;
+    return sLastQueriedKey;
+}
+
 extern "C" bool Rando_OverrideLocationKey(uint32_t location_key, uint8_t* type, uint8_t* subtype) {
+    sLastQueriedKey = location_key;
+    sQueriedKeyCount++;
     EnsureInitialized();
     if (!sActive || type == NULL)
         return false;
