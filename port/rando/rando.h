@@ -394,6 +394,9 @@ bool Rando_ActivateTable(uint64_t seed, RandomizerSettings settings, const uint1
 bool Rando_VerifyCurrentSeed(void);
 
 bool Rando_OverrideLocationKey(uint32_t location_key, uint8_t* type, uint8_t* subtype);
+/* Last key passed to Rando_OverrideLocationKey (UINT32_MAX for none) and how
+ * many calls there have been. */
+uint32_t Rando_LastQueriedLocationKey(uint32_t* count);
 
 bool Rando_OverrideItem(uint8_t* type, uint8_t* subtype);
 

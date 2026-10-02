@@ -5,8 +5,8 @@
  * per-state counts for checks and fusions, how many checks resolved through
  * a room's chest list versus a flag in the key, and every check and fusion
  * that is not done. Then, on a scratch copy of the save state, it sets each
- * resolved flag / fused bit in turn and asserts the state flips, restoring
- * gSave afterwards. Exits 0 on PASS, 1 on FAIL.
+ * resolved flag / scripted reward record / fused bit in turn and asserts the
+ * state flips, restoring gSave afterwards. Exits 0 on PASS, 1 on FAIL.
  *
  * Enable: TMC_REPRO_TRACKER=1. The first slot in use in the tmc.sav next to
  * the binary is played; with none, a fresh synthetic save is.
@@ -17,6 +17,10 @@
  * object whose flag is that local flag. A miss is not necessarily wrong (dig
  * spots, pots and bushes only spawn their item when disturbed, and some
  * items need an event first), so the pass reports and never fails.
+ *
+ * TMC_REPRO_TRACKER_HOOKS=1 plays the DHC B2 King and Melari reward scenes
+ * and checks the Simulation chest's data, reporting whether each one's rando
+ * hook fires (see HookPassTick). Like the warp pass it never fails.
  *
  * TMC_REPRO_TRACKER_UI=1 opens the settings overlay and walks to the Tracker
  * group with synthetic key presses (the shipped config.json binds the D-pad
@@ -30,13 +34,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "area.h"
 #include "common.h"
 #include "fileselect.h"
 #include "flags.h"
 #include "game.h"
+#include "item.h"
 #include "kinstone.h"
 #include "main.h"
+#include "npc.h"
 #include "player.h"
+#include "region.h"
 #include "room.h"
 #include "save.h"
 #include "entity.h"
@@ -47,6 +55,7 @@
 #include "port_runtime_config.h"
 #include "port_tracker.h"
 #include "rando/rando.h"
+#include "rando/rando_keymap.h"
 #include "rando/rando_runtime.h"
 
 extern void SetActiveSave(u32 idx);
@@ -62,6 +71,111 @@ static const char* StateName(PortTrackerState st) {
         default:
             return "untracked";
     }
+}
+
+/* Write the save record the game writes on giving a scripted check's reward
+ * (the writer is named where it is not obvious), or, for a check with none,
+ * give its vanilla item. False when there is nothing to write. */
+static bool MarkScriptedGiven(const RandoLocationDef* def) {
+    const unsigned group = (def->key >> 24) & 0x7F, a = (def->key >> 16) & 0xFF, b = (def->key >> 8) & 0xFF;
+    switch (group) {
+        case RANDO_SCRIPTED_KEY_GORON_MERCHANT: {
+            /* goronMerchantShopManager.c: buying slot b of the set on sale
+             * (set a is on sale at restock level a) sets its sold flag. */
+            static const u16 kLevels[] = { GORON_KAKERA_LV2, GORON_KAKERA_LV3, GORON_KAKERA_LV4, GORON_KAKERA_LV5 };
+            if (a > 0)
+                SetGlobalFlag(kLevels[a - 1]);
+            SetGlobalFlag(GORON_KAKERA_L + b);
+            return true;
+        }
+        case RANDO_SCRIPTED_KEY_CUCCO:
+            /* cuccoMinigame.c: winning round a + 1 advances the level to it;
+             * the tenth round sets ANJU_HEART. */
+            if (a == 9) {
+                SetGlobalFlag(ANJU_HEART);
+            } else {
+                static const u16 kBits[] = { ANJU_LV_BIT0, ANJU_LV_BIT1, ANJU_LV_BIT2, ANJU_LV_BIT3 };
+                for (unsigned bit = 0; bit < 4; ++bit) {
+                    if ((a + 1) >> bit & 1)
+                        SetGlobalFlag(kBits[bit]);
+                    else
+                        ClearGlobalFlag(kBits[bit]);
+                }
+            }
+            return true;
+        case RANDO_SCRIPTED_KEY_STOCKWELL:
+            switch (a) {
+                case RANDO_STOCKWELL_SLOT_80:
+                    SetLocalFlagByBank(FLAG_BANK_2, SHOP00_SAIFU);
+                    return true;
+                case RANDO_STOCKWELL_SLOT_600:
+                    SetLocalFlagByBank(FLAG_BANK_2, SHOP00_YAZUTSU);
+                    return true;
+                case RANDO_STOCKWELL_SLOT_EXTRA_600:
+                    SetLocalFlagByBank(FLAG_BANK_2, SHOP00_BOMBBAG);
+                    return true;
+            }
+            break;
+        case RANDO_SCRIPTED_KEY_SCRUB:
+            if (a == RANDO_SCRUB_KEY_BOTTLE) {
+                SetGlobalFlag(AKINDO_BOTTLE_SELL);
+                return true;
+            }
+            break;
+        case RANDO_SCRIPTED_KEY_SPECIAL:
+            switch (a) {
+                case RANDO_SPECIAL_KEY_BELL_HP:
+                    SetLocalFlagByBankB(GetFlagBankOffset(AREA_HYRULE_TOWN), 0xD0);
+                    return true;
+                case RANDO_SPECIAL_KEY_MINISH_GREAT_FAIRY:
+                    SetLocalFlagByBank(FLAG_BANK_2, IZUMI_01_FAIRY);
+                    return true;
+                case RANDO_SPECIAL_KEY_CRENEL_GREAT_FAIRY:
+                    SetLocalFlagByBank(FLAG_BANK_2, IZUMI_02_FAIRY);
+                    return true;
+                case RANDO_SPECIAL_KEY_VALLEY_GREAT_FAIRY:
+                    SetLocalFlagByBank(FLAG_BANK_2, IZUMI_00_FAIRY);
+                    return true;
+                case RANDO_SPECIAL_KEY_BOMB_MINISH_REMOTES:
+                    SetLocalFlagByBank(FLAG_BANK_2, KHOUSE26_REMOCON);
+                    return true;
+                case RANDO_SPECIAL_KEY_CRYPT_PRIZE:
+                    SetLocalFlagByBank(FLAG_BANK_3, OUBO_KAKERA);
+                    return true;
+                case RANDO_SPECIAL_KEY_DHC_KING:
+                    SetLocalFlagByBank(FLAG_BANK_10, LV6_1d_KEYGET);
+                    return true;
+                case RANDO_SPECIAL_KEY_GREGAL_SHELLS:
+                    SetLocalFlagByBank(FLAG_BANK_2, SORA_ELDER_TALK1ST);
+                    return true;
+                case RANDO_SPECIAL_KEY_BIGGORON:
+                    /* script_BigGoronTalk sets both on taking the shield,
+                     * script_BigGoronMirrorShield clears EXCHG on handing
+                     * the mirror shield back. */
+                    SetLocalFlagByBankB(FLAG_BANK_1, DAIGORON_SHIELD);
+                    ClearLocalFlagByBankB(FLAG_BANK_1, DAIGORON_EXCHG);
+                    return true;
+                case RANDO_SPECIAL_KEY_MELARI:
+                    SetInventoryValue(ITEM_QST_BROKEN_SWORD, 2);
+                    return true;
+                case RANDO_SPECIAL_KEY_CAFE_LADY:
+                    SetLocalFlagByBankB(FLAG_BANK_1, MACHI_MES_60);
+                    return true;
+                case RANDO_SPECIAL_KEY_DOG_BOTTLE:
+                    if (REGION_IS_EU)
+                        SetInventoryValue(ITEM_QST_DOGFOOD, 2);
+                    else
+                        SetGlobalFlag(BIN_DOGFOOD);
+                    return true;
+            }
+            break;
+    }
+    /* No record: vanilla play reads the check's own unique item. */
+    if (def->vanilla_item != ITEM_NONE) {
+        SetInventoryValue(def->vanilla_item, 1);
+        return true;
+    }
+    return false;
 }
 
 static int RunChecks(void) {
@@ -111,8 +225,9 @@ static int RunChecks(void) {
             fcounts[PORT_TRACKER_PENDING], fcounts[PORT_TRACKER_DONE]);
 
     /* Flip tests on a scratch copy: every open plain check must turn done
-     * when its resolved flag is set, every unfused fusion must leave open
-     * when its bit is set. */
+     * when its resolved flag is set, every open scripted check when the
+     * game's record of the reward is written, every unfused fusion must
+     * leave open when its bit is set. */
     static SaveFile backup;
     memcpy(&backup, &gSave, sizeof(gSave));
     for (size_t i = 0; i < n; ++i) {
@@ -131,6 +246,23 @@ static int RunChecks(void) {
             fails++;
         }
     }
+    /* Scripted checks: from the untouched save each time, since one write
+     * (a Goron restock, a cucco level) can close several checks at once. */
+    for (size_t i = 0; i < n; ++i) {
+        const RandoLocationDef* def = Rando_GetLocationDef((RandoLocationId)i);
+        memcpy(&gSave, &backup, sizeof(gSave));
+        if ((def->key & 0x80000000u) == 0 || Port_Tracker_CheckState(i) != PORT_TRACKER_OPEN)
+            continue;
+        if (!MarkScriptedGiven(def)) {
+            fprintf(stderr, "[tracker] FAIL: check %u (%s) is tracked but has no flip write\n", (unsigned)i,
+                    Port_Tracker_CheckName(i));
+            fails++;
+        } else if (Port_Tracker_CheckState(i) != PORT_TRACKER_DONE) {
+            fprintf(stderr, "[tracker] FAIL: check %u (%s) did not flip\n", (unsigned)i, Port_Tracker_CheckName(i));
+            fails++;
+        }
+    }
+    memcpy(&gSave, &backup, sizeof(gSave));
     for (unsigned k = 1; k <= PORT_TRACKER_FUSION_COUNT; ++k) {
         if (Port_Tracker_FusionState(k) != PORT_TRACKER_OPEN)
             continue;
@@ -331,6 +463,134 @@ static bool ShotPassTick(unsigned int frame) {
     return true;
 }
 
+/* TMC_REPRO_TRACKER_HOOKS=1: do the three rando hooks that were never seen
+ * firing (issue #10) fire? Each scene is played for real: warp next to the
+ * giver, force its talk interaction, press A through the text, and watch
+ * which location key the reward hooks ask Rando_OverrideLocationKey about.
+ * No seed is needed for that. Report only: it never fails the run. */
+typedef struct {
+    const char* name;
+    unsigned char area, room;
+    unsigned short x, y; /* where to stand: just below the giver */
+    unsigned char npc;
+    unsigned special; /* RANDO_SPECIAL_KEY_* the hook should build */
+    int oyakata_demo; /* Melari: OYAKATA_DEMO set (as a rando file starts) or clear */
+} HookScene;
+
+static const HookScene kHookScenes[] = {
+    { "DHC B2 King", 0x88, 0x39, 0x120, 0x78, KING_DALTUS, RANDO_SPECIAL_KEY_DHC_KING, -1 },
+    { "Melari, OYAKATA_DEMO set (rando file)", 0x10, 0x00, 0x190, 0x160, MELARI, RANDO_SPECIAL_KEY_MELARI, 1 },
+    { "Melari, OYAKATA_DEMO clear (control)", 0x10, 0x00, 0x190, 0x160, MELARI, RANDO_SPECIAL_KEY_MELARI, 0 },
+};
+
+static Entity* FindNpc(unsigned char id) {
+    for (int l = 0; l < 9; ++l) {
+        LinkedList* list = &gEntityLists[l];
+        for (Entity* e = list->first; e != NULL && e != (Entity*)list; e = e->next) {
+            if (e->kind == NPC && e->id == id)
+                return e;
+        }
+    }
+    return NULL;
+}
+
+/* Did the scene hand out its reward, whichever item the hook left it as? */
+static bool HookSceneGave(const HookScene* s) {
+    if (s->special == RANDO_SPECIAL_KEY_DHC_KING)
+        return CheckLocalFlagByBank(FLAG_BANK_10, LV6_1d_KEYGET) != 0;
+    return GetInventoryValue(ITEM_QST_BROKEN_SWORD) == 2;
+}
+
+/* The Simulation chest cannot be played here (area 0x44 is not warpable,
+ * see kBrokenWarpAreas), so check the two hooks against the data instead:
+ * the first-visit chest (roomInit.c loads entry 0xE of gUnk_080F0E1C) and
+ * the key OpenSmallChest would build for it. */
+static void SimulationChestProbe(void) {
+    extern const TileEntity gUnk_080F0E1C[];
+    const TileEntity* chest = &gUnk_080F0E1C[0xE];
+    int ci = Rando_RoomChestIndex(0x44, 0x00, chest->localFlag);
+    fprintf(stderr,
+            "[tracker] hook Simulation chest: first-visit chest type=%u flag=%u item=0x%02x, room tile entities=%s, "
+            "chest index=%d -> OpenSmallChest %s; the script hook only sees GivePlayerItem, and no Simulation "
+            "script gives one\n",
+            chest->type, chest->localFlag, chest->_2, GetRoomProperty(0x44, 0x00, 3) != NULL ? "yes" : "none", ci,
+            ci >= 0 ? "builds a key" : "builds no key");
+}
+
+static bool HookPassTick(unsigned int frame) {
+    static size_t next = 0;
+    static int phase = 0;
+    static unsigned int at = 0, gave_at = 0;
+    static uint32_t count_before = 0;
+    static bool fired = false;
+    static bool done = false;
+    static SaveFile backup;
+    const size_t count = sizeof(kHookScenes) / sizeof(kHookScenes[0]);
+
+    if (done)
+        return false;
+    if (next >= count) {
+        memcpy(&gSave, &backup, sizeof(gSave));
+        SimulationChestProbe();
+        done = true;
+        return false;
+    }
+    if (next == 0 && phase == 0)
+        memcpy(&backup, &gSave, sizeof(gSave));
+    gSave.stats.health = gSave.stats.maxHealth;
+    const HookScene* s = &kHookScenes[next];
+    const uint32_t want = Rando_BuildScriptedKey(RANDO_SCRIPTED_KEY_SPECIAL, s->special, 0, 0);
+
+    if (phase == 0) {
+        if (s->special == RANDO_SPECIAL_KEY_DHC_KING) {
+            /* Past the statue-breaking cutscene, key not yet given. */
+            SetLocalFlagByBank(FLAG_BANK_10, LV6_39_KING);
+            ClearLocalFlagByBank(FLAG_BANK_10, LV6_1d_KEYGET);
+        } else {
+            SetInventoryValue(ITEM_QST_BROKEN_SWORD, 1);
+            SetInventoryValue(ITEM_GREEN_SWORD, 0);
+            SetInventoryValue(ITEM_FIRE_ELEMENT, 0);
+            ClearGlobalFlag(WHITE_SWORD_END);
+            if (s->oyakata_demo)
+                SetLocalFlagByBank(FLAG_BANK_2, OYAKATA_DEMO);
+            else
+                ClearLocalFlagByBank(FLAG_BANK_2, OYAKATA_DEMO);
+        }
+        Port_DebugAction_Warp(s->area, s->room, s->x, s->y, 1);
+        Rando_LastQueriedLocationKey(&count_before);
+        fired = false;
+        gave_at = 0;
+        at = frame;
+        phase = 1;
+        return true;
+    }
+
+    uint32_t calls = 0;
+    if (Rando_LastQueriedLocationKey(&calls) == want && calls != count_before)
+        fired = true;
+    if (frame < at + 60)
+        return true; /* room load */
+    Entity* npc = FindNpc(s->npc);
+    const bool gave = HookSceneGave(s);
+    if (gave && gave_at == 0)
+        gave_at = frame;
+    if (!gave && npc != NULL && npc->interactType == INTERACTION_NONE && (frame & 0x3F) == 0)
+        npc->interactType = 1; /* as if Link had talked to it */
+    if ((frame & 0xF) == 0)
+        Port_Config_TestForceEdge(PORT_INPUT_A);
+    /* Done once the reward is out and its text is through, or after 40 s
+     * (a scene that never gives its reward runs out the clock). */
+    const bool here = gRoomControls.area == s->area && gRoomControls.room == s->room;
+    if ((gave_at == 0 || frame < gave_at + 240) && frame < at + 2400)
+        return true;
+    fprintf(stderr, "[tracker] hook %s: npc=%s reward given=%s, hook %s (key 0x%08x)%s\n", s->name,
+            npc != NULL ? "found" : "missing", gave ? "yes" : "no", fired ? "fired" : "did not fire", (unsigned)want,
+            here ? "" : " (warp did not arrive)");
+    next++;
+    phase = 0;
+    return true;
+}
+
 void Port_ReproTracker_Tick(unsigned int frame) {
     static int active = -1;
     static int booted = 0;
@@ -401,6 +661,9 @@ void Port_ReproTracker_Tick(unsigned int frame) {
         return;
     const char* shots = getenv("TMC_REPRO_TRACKER_SHOTS");
     if (shots && *shots && strcmp(shots, "0") != 0 && ShotPassTick(frame))
+        return;
+    const char* hooks = getenv("TMC_REPRO_TRACKER_HOOKS");
+    if (hooks && *hooks && strcmp(hooks, "0") != 0 && HookPassTick(frame))
         return;
     const char* warp = getenv("TMC_REPRO_TRACKER_WARP");
     if (warp && *warp && strcmp(warp, "0") != 0 && WarpPassTick(frame))
