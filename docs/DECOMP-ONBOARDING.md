@@ -239,10 +239,9 @@ xmake build -y tmc_pc
 TMC_AUTOPLAY=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./dist/USA/tmc_pc --no-audio
 ```
 
-A successful launch prints `Port layer initialized. Entering AgbMain...`. There
-is **no automated test suite** (`AGENTS.md`, `CONTRIBUTING.md`); verification is
-the smoke run plus interactive play via the **F8** warp/debug menu and **F9**
-repro capture.
+A successful launch prints `Port layer initialized. Entering AgbMain...`. For how
+changes are verified (including the focused regression suites), see
+`CONTRIBUTING.md`.
 
 **GBA ROM (byte-matching build):**
 

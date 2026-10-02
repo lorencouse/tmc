@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Check the production room-region visibility gate used by exterior doors."""
-import os
 from pathlib import Path
-import shlex
 import subprocess
 import tempfile
+
+from regression_build import cc
 
 ROOT = Path(__file__).resolve().parent.parent
 source = (ROOT / 'src/main.c').read_text()
@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='tmc-door-visibility-') as directory:
     source_path = Path(directory) / 'test.c'
     source_path.write_text(harness)
     binary = Path(directory) / 'test'
-    subprocess.run(shlex.split(os.environ.get('CC', 'cc')) + [
+    subprocess.run(cc() + [
         '-std=c11', '-DPC_PORT', '-Wall', '-Wextra', '-Werror',
         str(source_path), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

@@ -177,3 +177,4 @@ android/app/build/
 
 !tools/enemy_home_regression_test.py
 !tools/npc_context_regression_test.py
+!tools/regression_build.py

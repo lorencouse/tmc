@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Exercise production rolling transition entry/completion without ROM or SDL."""
-import os
 from pathlib import Path
-import shlex
 import subprocess
 import tempfile
 from widescreen_engine_regression_test import function
+
+from regression_build import cc
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -21,7 +21,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='tmc-ws-scroll-') as directory:
         (Path(directory) / 'widescreen_scroll_functions.inc').write_text('\n'.join(functions))
         binary = Path(directory) / 'test'
-        command = shlex.split(os.environ.get('CC', 'cc')) + [
+        command = cc() + [
             '-std=gnu11', '-DPC_PORT', '-DMULTI_REGION', '-DUSA', '-DMODE1_GBA_WIDTH=384',
             '-I.', '-Iinclude', '-Iport', '-I' + directory, 'tools/tests/widescreen_scroll.c', '-o', str(binary)]
         subprocess.run(command, cwd=ROOT, check=True)

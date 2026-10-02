@@ -14,10 +14,10 @@ to avoid pulling the complete SDL bootstrap into a standalone test.
 """
 import argparse
 from pathlib import Path
-import os
-import shlex
 import subprocess
 import tempfile
+
+from regression_build import GC_SECTIONS, cc, cxx
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,8 +36,8 @@ def main():
         if len(objects) != 1:
             parser.error('build tmc_pc first, or specify --rom-object')
         obj = objects[0]
-    cc = shlex.split(os.environ.get('CC', 'cc'))
-    cxx = shlex.split(os.environ.get('CXX', 'c++'))
+    c_compiler = cc()
+    cxx_compiler = cxx()
     cflags = ['-std=gnu11', '-DPC_PORT', '-DMULTI_REGION', '-DUSA',
               '-I.', '-Iinclude', '-Iport', '-ffunction-sections', '-fdata-sections']
     with tempfile.TemporaryDirectory(prefix='tmc-regression-') as directory:
@@ -53,10 +53,10 @@ def main():
         tables_end = rom_source.index('/* Accessor for the active region', tables_start)
         (tmp / 'rom_table_resolvers.inc').write_text(rom_source[tables_start:tables_end] + rom_source[start:end])
         checks = [
-            ('collision', cc + cflags + ['tools/tests/regional_collision.c', str(obj), '-Wl,--gc-sections']),
-            ('rom_tables', cc + cflags + ['-I' + str(tmp), 'tools/tests/regional_rom_tables.c', '-Wl,--gc-sections']),
-            ('barrel', cc + cflags + ['tools/tests/barrel_fall.c', '-Wl,--gc-sections']),
-            ('audio', cxx + ['-std=c++17', '-I' + str(tmp), 'tools/tests/regional_song_map.cpp']),
+            ('collision', c_compiler + cflags + ['tools/tests/regional_collision.c', str(obj), GC_SECTIONS]),
+            ('rom_tables', c_compiler + cflags + ['-I' + str(tmp), 'tools/tests/regional_rom_tables.c', GC_SECTIONS]),
+            ('barrel', c_compiler + cflags + ['tools/tests/barrel_fall.c', GC_SECTIONS]),
+            ('audio', cxx_compiler + ['-std=c++17', '-I' + str(tmp), 'tools/tests/regional_song_map.cpp']),
         ]
         for name, command in checks:
             binary = tmp / name

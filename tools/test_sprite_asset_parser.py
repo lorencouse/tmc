@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Compile the production sprite JSON parser in isolation with ASan/UBSan.
 
-Run from any directory. Requires c++, and nlohmann_json installed by xmake
-(or supply its include directory through CPLUS_INCLUDE_PATH).
+Run from any directory. Requires c++ and nlohmann_json, found through
+TMC_JSON_INCLUDE, pkg-config or xmake (see regression_build.py).
 """
 from pathlib import Path
 import subprocess, tempfile
+from regression_build import cxx, json_cflags
 s=(Path(__file__).resolve().parents[1] / 'port/port_asset_loader.cpp').read_text()
 parser=s[s.index('void ParseSpritePtrs('):s.index('\nvoid WriteLe32(')]
 helper=s[s.index('std::string JsonStringOrEmpty('):s.index('\nbool IsRomPointer(')]
@@ -37,11 +38,9 @@ int main() {
  assert(gAssetGroupCache.spritePtrs[511].pad==511);
 }
 '''
-header=next(Path.home().glob('.xmake/packages/n/nlohmann_json/*/*/include/nlohmann/json.hpp'), None)
-includes=['-I'+str(header.parent.parent)] if header else []
 with tempfile.TemporaryDirectory() as td:
  p=Path(td); (p/'test.cpp').write_text(code)
- subprocess.run(['c++','-std=c++17','-fsanitize=address,undefined','-g',*includes,str(p/'test.cpp'),'-o',str(p/'test')],check=True)
+ subprocess.run([*cxx(),'-std=c++17','-fsanitize=address,undefined','-g',*json_cflags(),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
  subprocess.run([str(p/'test')],check=True)
 
 print("Sprite asset parser regression checks passed.")
