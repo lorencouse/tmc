@@ -106,6 +106,10 @@ std::string sActiveSaveProfile = "tmc.sav";
 bool sAutosaveEnabled = true;
 u32 sAutosaveIntervalMs = 60000;
 int sSaveStateSlot = 0;
+/* Suspend on quit: quitting from gameplay writes a dedicated state that the
+ * next launch resumes from the title screen (port_quicksave.c). Off by
+ * default so vanilla play is unchanged. */
+bool sSuspendOnQuit = false;
 /* Touch input scheme from matheo's launcher integration — kept for
  * Android compatibility. */
 PortTouchScheme sTouchScheme = PORT_TOUCH_SCHEME_JOYSTICK;
@@ -310,6 +314,7 @@ struct ScaleCfg {
 const BoolCfg kBoolCfg[] = {
     { "port_settings_menu", &sPortSettingsMenuEnabled, true },
     { "autosave_enabled", &sAutosaveEnabled, true },
+    { "suspend_on_quit", &sSuspendOnQuit, false },
 #ifdef __ANDROID__
     { "widescreen_enabled", &sWidescreenEnabled, false },
 #else
@@ -1020,6 +1025,16 @@ extern "C" void Port_Config_SetAutosaveEnabled(bool enabled) {
 
 extern "C" int Port_Config_SaveStateSlot(void) {
     return sSaveStateSlot;
+}
+
+extern "C" bool Port_Config_SuspendOnQuit(void) {
+    return sSuspendOnQuit;
+}
+
+extern "C" void Port_Config_SetSuspendOnQuit(bool on) {
+    sSuspendOnQuit = on;
+    sConfigJson["suspend_on_quit"] = on;
+    SaveConfig();
 }
 
 extern "C" void Port_Config_SetSaveStateSlot(int slot) {

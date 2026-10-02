@@ -1231,6 +1231,8 @@ void SetTask(unsigned int task);
 extern "C" int Port_QuickSave_SaveSlot(int slot);
 extern "C" int Port_QuickSave_AutoOnAreaChangeEnabled(void);
 extern "C" void Port_QuickSave_SetAutoOnAreaChange(int on);
+extern "C" int Port_QuickSave_SuspendEnabled(void);
+extern "C" void Port_RequestSuspendQuit(void);
 
 static void DoQuitToTitle(bool saveFirst) {
     if (saveFirst) {
@@ -1497,6 +1499,24 @@ static void DrawRibbonSavesTab(void) {
                                    "every time you transition between "
                                    "areas/rooms. Independent of the "
                                    "interval timer above.");
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+    {
+        bool suspendOn = Port_Config_SuspendOnQuit();
+        if (ImGui::Checkbox("Suspend on quit", &suspendOn))
+            Port_Config_SetSuspendOnQuit(suspendOn);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(360.0f);
+            ImGui::TextUnformatted("Quitting during play (Exit Game, closing "
+                                   "the window, or the frontend closing the "
+                                   "port) saves where you are, and the next "
+                                   "launch picks up there instead of at the "
+                                   "title screen. Used once, then cleared.");
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
         }
@@ -5528,7 +5548,19 @@ extern "C" void Port_ImGui_RequestQuitModal(void) {
      * exit. This catches the rare double-click on the X button. */
     if (sQuitModalConfirmed)
         return;
+    /* Nothing to ask with suspend_on_quit on: the quit path writes the
+     * suspend state and the next launch resumes it. */
+    if (Port_QuickSave_SuspendEnabled()) {
+        Port_RequestSuspendQuit();
+        return;
+    }
     sQuitModalArmed = true;
+}
+/* The modal itself, never the suspend shortcut: used by the quit path once a
+ * suspend is off the table. */
+extern "C" void Port_ImGui_ArmQuitModal(void) {
+    if (!sQuitModalConfirmed)
+        sQuitModalArmed = true;
 }
 
 static void DrawQuitModal(void) {

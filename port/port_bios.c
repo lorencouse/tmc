@@ -28,6 +28,7 @@
 #include <SDL3/SDL.h>
 #include <math.h>
 #include <setjmp.h>
+#include <signal.h>
 #include "port_repro.h"
 
 /* Save-state selection API (port_quicksave.c has no header of its own; the
@@ -37,8 +38,20 @@ extern void Port_QuickSave_CycleSelectedSlot(int direction);
 extern int Port_QuickSave_SaveSelected(void);
 extern int Port_QuickSave_SaveToNewSlot(void);
 extern int Port_QuickSave_LoadSelected(void);
+extern int Port_QuickSave_SuspendEnabled(void);
+extern int Port_QuickSave_WillSuspend(void);
+extern int Port_QuickSave_Suspend(void);
 
 static bool gQuitRequested = false;
+/* Set by SIGTERM (a frontend closing the port, or gptokeyb's quit hotkey);
+ * acted on at the next frame boundary by QuitIfRequested. */
+static volatile sig_atomic_t sTermSignal = 0;
+/* A quit that ends in a suspend, waiting for a settled gameplay frame: the
+ * tick Exit Game / the close button (sSuspendQuitAtMs) or SIGTERM (sTermAtMs)
+ * asked for it; non-zero while pending. */
+static u64 sSuspendQuitAtMs = 0;
+static u64 sTermAtMs = 0;
+#define SUSPEND_QUIT_WAIT_MS 2000
 static bool sFastForward = false;
 static int sFrameNum = 0;
 
@@ -944,6 +957,63 @@ int Port_Profile_Enabled(void) {
     return en;
 }
 
+static void OnTermSignal(int sig) {
+    (void)sig;
+    sTermSignal = 1;
+}
+
+/* Replaces SDL's own SIGTERM handler, which only queues SDL_EVENT_QUIT and so
+ * lands on the quit modal -- a prompt nobody answers when the frontend is the
+ * one quitting. Called once, right before AgbMain. */
+void Port_InstallQuitSignalHandler(void) {
+    signal(SIGTERM, OnTermSignal);
+}
+
+/* Called by Port_ImGui_RequestQuitModal in place of the modal while
+ * suspend_on_quit applies. */
+void Port_RequestSuspendQuit(void) {
+    if (sSuspendQuitAtMs == 0)
+        sSuspendQuitAtMs = SDL_GetTicks() | 1;
+}
+
+/* The frame loop's only way out, run at a frame boundary.
+ *
+ * The ImGui quit-confirm modal is rendered once per frame from
+ * port_imgui_menu.cpp; when the user picks Save & Quit or Quit Without
+ * Saving it sets the confirmed flag, which we promote into gQuitRequested
+ * here. With suspend_on_quit on and gameplay running, the modal is skipped:
+ * the quit waits for a settled frame (room loads and transitions last a few
+ * frames), writes the suspend state and exits. If gameplay is left first, the
+ * write fails, or no settled frame comes within SUSPEND_QUIT_WAIT_MS (a
+ * practice pause frozen mid-transition), the modal is shown instead --
+ * except after SIGTERM, which exits anyway. */
+static void QuitIfRequested(void) {
+    if (sTermSignal) {
+        sTermSignal = 0;
+        if (sTermAtMs == 0)
+            sTermAtMs = SDL_GetTicks() | 1;
+    }
+    if (sSuspendQuitAtMs != 0 || sTermAtMs != 0) {
+        if (Port_QuickSave_WillSuspend()) {
+            if (Port_QuickSave_Suspend() || sTermAtMs != 0)
+                exit(0);
+        } else if (Port_QuickSave_SuspendEnabled()) {
+            const u64 askedAtMs = sTermAtMs != 0 ? sTermAtMs : sSuspendQuitAtMs;
+            if (SDL_GetTicks() - askedAtMs < SUSPEND_QUIT_WAIT_MS)
+                return;
+            if (sTermAtMs != 0)
+                exit(0);
+        }
+        sSuspendQuitAtMs = 0;
+        sTermAtMs = 0;
+        Port_ImGui_ArmQuitModal(); /* what SDL's handler led to */
+    }
+    if (Port_ImGui_QuitConfirmed())
+        gQuitRequested = true;
+    if (gQuitRequested)
+        exit(0);
+}
+
 void VBlankIntrWait(void) {
     u64 nowNs;
     bool decoupled;
@@ -960,10 +1030,7 @@ void VBlankIntrWait(void) {
          * the second paused present onward. */
         Port_PresentOnce(true);
         Port_PumpEvents();
-        if (Port_ImGui_QuitConfirmed())
-            gQuitRequested = true;
-        if (gQuitRequested)
-            exit(0);
+        QuitIfRequested();
         SDL_Delay(4); /* ~4ms: responsive UI without a busy spin */
     }
 
@@ -1400,16 +1467,7 @@ void VBlankIntrWait(void) {
         sPacePresentNsThisSec = 0;
     }
 
-    /* The ImGui quit-confirm modal is rendered once per frame from
-     * port_imgui_menu.cpp; when the user picks Save & Quit or Quit
-     * Without Saving it sets the confirmed flag, which we promote
-     * into gQuitRequested here so the loop unwinds normally. */
-    if (Port_ImGui_QuitConfirmed())
-        gQuitRequested = true;
-
-    if (gQuitRequested) {
-        exit(0);
-    }
+    QuitIfRequested();
 
     Port_PumpEvents();
     Port_UpdateInput();

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Suspend on quit (issue #2): with "Suspend on quit" on (F8 → Saves,
+  `suspend_on_quit` in `config.json`, off by default), quitting during play
+  through Exit Game, the window's close button or a SIGTERM from the frontend
+  writes `state_suspend.bin`, and the next launch resumes there from the title
+  screen. The file is removed as it is resumed, so a crash does not loop back
+  into it. The resume goes through the engine like any cross-session state:
+  the save file and position come back, and room state starts fresh.
+
 - Accessibility passive cues (enemy radar, footsteps, hazard warnings, wall
   bumps) are off by default; they were heard as random beeping while walking
   (issue #11). Existing `config.json` files are switched off once on first
