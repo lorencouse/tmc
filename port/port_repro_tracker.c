@@ -523,13 +523,21 @@ static bool HookPassTick(unsigned int frame) {
     static unsigned int at = 0, gave_at = 0;
     static uint32_t count_before = 0;
     static bool fired = false;
+    static bool done = false;
+    static SaveFile backup;
     const size_t count = sizeof(kHookScenes) / sizeof(kHookScenes[0]);
 
-    gSave.stats.health = gSave.stats.maxHealth;
+    if (done)
+        return false;
     if (next >= count) {
+        memcpy(&gSave, &backup, sizeof(gSave));
         SimulationChestProbe();
+        done = true;
         return false;
     }
+    if (next == 0 && phase == 0)
+        memcpy(&backup, &gSave, sizeof(gSave));
+    gSave.stats.health = gSave.stats.maxHealth;
     const HookScene* s = &kHookScenes[next];
     const uint32_t want = Rando_BuildScriptedKey(RANDO_SCRIPTED_KEY_SPECIAL, s->special, 0, 0);
 
