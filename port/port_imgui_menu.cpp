@@ -5556,6 +5556,12 @@ extern "C" void Port_ImGui_RequestQuitModal(void) {
     }
     sQuitModalArmed = true;
 }
+/* The modal itself, never the suspend shortcut: used by the quit path once a
+ * suspend is off the table. */
+extern "C" void Port_ImGui_ArmQuitModal(void) {
+    if (!sQuitModalConfirmed)
+        sQuitModalArmed = true;
+}
 
 static void DrawQuitModal(void) {
     if (sQuitModalArmed) {

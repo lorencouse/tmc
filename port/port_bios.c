@@ -46,12 +46,12 @@ static bool gQuitRequested = false;
 /* Set by SIGTERM (a frontend closing the port, or gptokeyb's quit hotkey);
  * acted on at the next frame boundary by QuitIfRequested. */
 static volatile sig_atomic_t sTermSignal = 0;
-/* A quit that ends in a suspend, waiting for a settled gameplay frame:
- * Exit Game / the close button (sSuspendQuitPending), or SIGTERM
- * (sTermAtMs, the tick it arrived; non-zero while pending). */
-static bool sSuspendQuitPending = false;
+/* A quit that ends in a suspend, waiting for a settled gameplay frame: the
+ * tick Exit Game / the close button (sSuspendQuitAtMs) or SIGTERM (sTermAtMs)
+ * asked for it; non-zero while pending. */
+static u64 sSuspendQuitAtMs = 0;
 static u64 sTermAtMs = 0;
-#define TERM_SUSPEND_WAIT_MS 2000
+#define SUSPEND_QUIT_WAIT_MS 2000
 static bool sFastForward = false;
 static int sFrameNum = 0;
 
@@ -972,7 +972,8 @@ void Port_InstallQuitSignalHandler(void) {
 /* Called by Port_ImGui_RequestQuitModal in place of the modal while
  * suspend_on_quit applies. */
 void Port_RequestSuspendQuit(void) {
-    sSuspendQuitPending = true;
+    if (sSuspendQuitAtMs == 0)
+        sSuspendQuitAtMs = SDL_GetTicks() | 1;
 }
 
 /* The frame loop's only way out, run at a frame boundary.
@@ -982,27 +983,30 @@ void Port_RequestSuspendQuit(void) {
  * Saving it sets the confirmed flag, which we promote into gQuitRequested
  * here. With suspend_on_quit on and gameplay running, the modal is skipped:
  * the quit waits for a settled frame (room loads and transitions last a few
- * frames), writes the suspend state and exits. If gameplay is left first or
- * the write fails, the modal is shown instead -- except after SIGTERM, which
- * exits anyway, at the latest TERM_SUSPEND_WAIT_MS after the signal. */
+ * frames), writes the suspend state and exits. If gameplay is left first, the
+ * write fails, or no settled frame comes within SUSPEND_QUIT_WAIT_MS (a
+ * practice pause frozen mid-transition), the modal is shown instead --
+ * except after SIGTERM, which exits anyway. */
 static void QuitIfRequested(void) {
     if (sTermSignal) {
         sTermSignal = 0;
         if (sTermAtMs == 0)
             sTermAtMs = SDL_GetTicks() | 1;
     }
-    if (sSuspendQuitPending || sTermAtMs != 0) {
+    if (sSuspendQuitAtMs != 0 || sTermAtMs != 0) {
         if (Port_QuickSave_WillSuspend()) {
             if (Port_QuickSave_Suspend() || sTermAtMs != 0)
                 exit(0);
         } else if (Port_QuickSave_SuspendEnabled()) {
-            if (sTermAtMs == 0 || SDL_GetTicks() - sTermAtMs < TERM_SUSPEND_WAIT_MS)
+            const u64 askedAtMs = sTermAtMs != 0 ? sTermAtMs : sSuspendQuitAtMs;
+            if (SDL_GetTicks() - askedAtMs < SUSPEND_QUIT_WAIT_MS)
                 return;
-            exit(0);
+            if (sTermAtMs != 0)
+                exit(0);
         }
-        sSuspendQuitPending = false;
+        sSuspendQuitAtMs = 0;
         sTermAtMs = 0;
-        Port_ImGui_RequestQuitModal(); /* what SDL's handler led to */
+        Port_ImGui_ArmQuitModal(); /* what SDL's handler led to */
     }
     if (Port_ImGui_QuitConfirmed())
         gQuitRequested = true;
