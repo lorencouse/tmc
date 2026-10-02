@@ -3,8 +3,8 @@
  *
  * GBA ROM at 0x08000000. Pointer tables and data blobs are translated
  * or copied as needed for the PC port.
- * are translated to native pointers. ROM pages (4 KB) are extracted to
- * rom_data/ so the game can run without the full ROM after first boot.
+ * are translated to native pointers. ROM data is always read from the
+ * full ROM file; nothing is copied out of it to disk.
  */
 
 #include "port_rom.h"
@@ -57,7 +57,6 @@ struct dirent {
 DIR* opendir(const char*);
 struct dirent* readdir(DIR*);
 int closedir(DIR*);
-int mkdir(const char*, unsigned);
 extern long readlink(const char*, char*, unsigned long);
 #endif
 
@@ -171,247 +170,63 @@ const char* Port_FindBaseRomPath(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  ROM page extraction (4 KB pages)                                  */
+/*  ROM page bookkeeping (4 KB pages)                                 */
 /* ------------------------------------------------------------------ */
-#define ROM_EXTRACT_DIR "rom_data"
+/* Earlier builds copied every known ROM region to rom_data/XXXXXXXX.bin. The
+ * full baserom.gba is required and is read over those pages on every boot, so
+ * the copies were never used, and ~2,800 loose 4 KB files cost hundreds of MB
+ * of cluster slack on large exFAT SD cards (issue #9). The game no longer
+ * writes or reads rom_data/; an old folder is unused and can be deleted by
+ * hand. Pages are read straight from the loaded ROM and only tracked in
+ * memory, which keeps the first-access log in Port_LogRomAccess quiet for
+ * regions the port knows. */
 #define ROM_PAGE_SHIFT 12
 #define ROM_PAGE_SIZE (1u << ROM_PAGE_SHIFT)              /* 4096 */
 #define ROM_EXPECTED_SIZE 0x1000000u                      /* 16 MB USA ROM */
 #define ROM_MAX_PAGES (ROM_EXPECTED_SIZE / ROM_PAGE_SIZE) /* 4096 */
 
-/* Bitfield: 1 = page already extracted this session */
-static u8 sExtractedPages[ROM_MAX_PAGES / 8];
+/* Bitfield: 1 = page already known or accessed this session */
+static u8 sKnownPages[ROM_MAX_PAGES / 8];
 
-static void MarkPageExtracted(u32 page) {
-    sExtractedPages[page / 8] |= (u8)(1 << (page % 8));
+static void MarkPageKnown(u32 page) {
+    sKnownPages[page / 8] |= (u8)(1 << (page % 8));
 }
-static int IsPageExtracted(u32 page) {
-    return (sExtractedPages[page / 8] >> (page % 8)) & 1;
-}
-
-static void EnsureExtractDir(void) {
-#ifdef _WIN32
-    _mkdir(ROM_EXTRACT_DIR);
-#else
-    mkdir(ROM_EXTRACT_DIR, 0755);
-#endif
+static int IsPageKnown(u32 page) {
+    return (sKnownPages[page / 8] >> (page % 8)) & 1;
 }
 
-/* Extract a single 4 KB page to rom_data/XXXXXXXX.bin */
-static void ExtractPage(u32 page) {
-    if (page >= ROM_MAX_PAGES || !gRomData)
-        return;
-    if (IsPageExtracted(page))
-        return;
-
-    u32 offset = page << ROM_PAGE_SHIFT;
-    u32 size = ROM_PAGE_SIZE;
-    if (offset + size > gRomSize)
-        size = gRomSize - offset;
-    if (size == 0)
-        return;
-
-    EnsureExtractDir();
-
-    char path[256];
-    snprintf(path, sizeof(path), ROM_EXTRACT_DIR "/%08X.bin", offset);
-
-    /* Don't overwrite if file already exists with correct size */
-    FILE* chk = fopen(path, "rb");
-    if (chk) {
-        fseek(chk, 0, SEEK_END);
-        long existing = ftell(chk);
-        fclose(chk);
-        if ((u32)existing == size) {
-            MarkPageExtracted(page);
-            return;
-        }
-    }
-
-    FILE* f = fopen(path, "wb");
-    if (f) {
-        const size_t wrote = fwrite(&gRomData[offset], 1, size, f);
-        const int closed = fclose(f);
-        if (wrote != size || closed != 0) {
-            fprintf(stderr, "WARNING: short write extracting %s (%zu/%u bytes); removing\n", path, wrote, size);
-            remove(path);
-        } else {
-            /* Mark only once the page is actually on disk: a read-only install
-             * directory must retry next time instead of counting the page as
-             * extracted for the rest of the session. */
-            MarkPageExtracted(page);
-        }
-    }
-}
-
-/* Extract all pages covering [rom_offset .. rom_offset+size) */
-static void ExtractRegion(u32 rom_offset, u32 size) {
+/* Mark all pages covering [rom_offset .. rom_offset+size) */
+static void MarkRegionKnown(u32 rom_offset, u32 size) {
     if (!gRomData || size == 0)
         return;
     u32 first_page = rom_offset >> ROM_PAGE_SHIFT;
     u32 last_page = (rom_offset + size - 1) >> ROM_PAGE_SHIFT;
     for (u32 p = first_page; p <= last_page && p < ROM_MAX_PAGES; p++)
-        ExtractPage(p);
-}
-
-/* Load rom_data pages from a specific directory into gRomData.
- * Returns the number of pages loaded. */
-static int LoadExtractedPagesFrom(const char* dir) {
-    int loaded = 0;
-
-    /* Allocate gRomData if not yet done */
-    if (!gRomData) {
-        gRomSize = ROM_EXPECTED_SIZE;
-        gRomData = (u8*)calloc(1, gRomSize);
-        if (!gRomData) {
-            fprintf(stderr, "ERROR: Failed to allocate %u bytes for ROM buffer\n", gRomSize);
-            return 0;
-        }
-    }
-
-#ifdef _WIN32
-    char pattern[4096 + 16];
-    if (snprintf(pattern, sizeof(pattern), "%s\\*.bin", dir) >= (int)sizeof(pattern)) {
-        fprintf(stderr, "WARNING: rom_data dir path too long, skipping: %s\n", dir);
-        return 0;
-    }
-    WIN32_FIND_DATAA fd;
-    HANDLE hFind = FindFirstFileA(pattern, &fd);
-    if (hFind == INVALID_HANDLE_VALUE)
-        return 0;
-    do {
-        u32 offset = 0;
-        if (sscanf(fd.cFileName, "%08X.bin", &offset) != 1)
-            continue;
-        if (offset >= gRomSize)
-            continue;
-
-        char path[4096 + 280];
-        if (snprintf(path, sizeof(path), "%s\\%s", dir, fd.cFileName) >= (int)sizeof(path)) {
-            fprintf(stderr, "WARNING: rom_data path too long, skipping: %s\n", fd.cFileName);
-            continue;
-        }
-        FILE* f = fopen(path, "rb");
-        if (!f)
-            continue;
-        fseek(f, 0, SEEK_END);
-        long ftellRes = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        if (ftellRes < 0) {
-            fclose(f);
-            continue;
-        }
-        /* Clamp in 64-bit: `offset + fsize` wraps in u32 for a >=4 GB file,
-         * which would defeat the bound and overflow gRomData. offset is
-         * already known < gRomSize. */
-        u64 avail = (u64)gRomSize - offset;
-        u32 fsize = (u64)ftellRes > avail ? (u32)avail : (u32)ftellRes;
-        const size_t got = fread(&gRomData[offset], 1, fsize, f);
-        fclose(f);
-        if (got != fsize) {
-            fprintf(stderr, "WARNING: short read on %s (%zu/%u bytes); skipping\n", path, got, fsize);
-            continue;
-        }
-
-        /* Mark pages as extracted so we don't re-write them */
-        u32 first_page = offset >> ROM_PAGE_SHIFT;
-        u32 last_page = (offset + fsize - 1) >> ROM_PAGE_SHIFT;
-        for (u32 p = first_page; p <= last_page; p++)
-            MarkPageExtracted(p);
-        loaded++;
-    } while (FindNextFileA(hFind, &fd));
-    FindClose(hFind);
-#else
-    DIR* dirp = opendir(dir);
-    if (!dirp)
-        return 0;
-    struct dirent* ent;
-    while ((ent = readdir(dirp)) != NULL) {
-        u32 offset = 0;
-        if (sscanf(ent->d_name, "%08X.bin", &offset) != 1)
-            continue;
-        if (offset >= gRomSize)
-            continue;
-
-        char path[4096 + 280];
-        if (snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name) >= (int)sizeof(path)) {
-            fprintf(stderr, "WARNING: rom_data path too long, skipping: %s\n", ent->d_name);
-            continue;
-        }
-        FILE* f = fopen(path, "rb");
-        if (!f)
-            continue;
-        fseek(f, 0, SEEK_END);
-        long ftellRes = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        if (ftellRes < 0) {
-            fclose(f);
-            continue;
-        }
-        /* Clamp in 64-bit: `offset + fsize` wraps in u32 for a >=4 GB file,
-         * which would defeat the bound and overflow gRomData. offset is
-         * already known < gRomSize. */
-        u64 avail = (u64)gRomSize - offset;
-        u32 fsize = (u64)ftellRes > avail ? (u32)avail : (u32)ftellRes;
-        const size_t got = fread(&gRomData[offset], 1, fsize, f);
-        fclose(f);
-        if (got != fsize) {
-            fprintf(stderr, "WARNING: short read on %s (%zu/%u bytes); skipping\n", path, got, fsize);
-            continue;
-        }
-
-        u32 first_page = offset >> ROM_PAGE_SHIFT;
-        u32 last_page = (offset + fsize - 1) >> ROM_PAGE_SHIFT;
-        for (u32 p = first_page; p <= last_page; p++)
-            MarkPageExtracted(p);
-        loaded++;
-    }
-    closedir(dirp);
-#endif
-
-    return loaded;
-}
-
-/* Try multiple rom_data directories and return total pages loaded */
-static int LoadExtractedPages(void) {
-    const char* dirs[] = {
-        ROM_EXTRACT_DIR,  /* rom_data/ (cwd) */
-        "../../rom_data", /* project root from build/pc/ */
-    };
-    int total = 0;
-    for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); i++) {
-        int n = LoadExtractedPagesFrom(dirs[i]);
-        if (n > 0) {
-            fprintf(stderr, "  rom_data: %d pages from %s\n", n, dirs[i]);
-            total += n;
-        }
-    }
-    return total;
+        MarkPageKnown(p);
 }
 
 /* ------------------------------------------------------------------ */
-/*  ROM access logging — now also extracts the touched page           */
+/*  ROM access logging                                                */
 /* ------------------------------------------------------------------ */
 void Port_LogRomAccess(u32 gba_addr, const char* caller) {
     if (gba_addr < 0x08000000u)
         return;
     u32 offset = gba_addr - 0x08000000u;
     u32 page = offset >> ROM_PAGE_SHIFT;
-    if (page < ROM_MAX_PAGES && !IsPageExtracted(page)) {
+    if (page < ROM_MAX_PAGES && !IsPageKnown(page)) {
         fprintf(stderr, "[ROM] New page %08X accessed from %s\n", page << ROM_PAGE_SHIFT, caller ? caller : "?");
         fflush(stderr);
+        MarkPageKnown(page);
     }
-    ExtractPage(page);
 }
 
 void Port_PrintRomAccessSummary(void) {
     int count = 0;
     for (u32 p = 0; p < ROM_MAX_PAGES; p++) {
-        if (IsPageExtracted(p))
+        if (IsPageKnown(p))
             count++;
     }
-    fprintf(stderr, "\n[ROM] Summary: %d pages (4 KB each, %d KB total) extracted to " ROM_EXTRACT_DIR "/\n", count,
-            count * 4);
+    fprintf(stderr, "\n[ROM] Summary: %d known pages (4 KB each, %d KB total)\n", count, count * 4);
     fflush(stderr);
 }
 
@@ -1328,15 +1143,9 @@ static FILE* TryOpenRom(const char** paths, int count, char* foundPath, int foun
 void Port_LoadRom(const char* path) {
     sLoadedRomPath[0] = '\0';
 #ifndef TMC_N64
-    memset(sExtractedPages, 0, sizeof(sExtractedPages));
+    memset(sKnownPages, 0, sizeof(sKnownPages));
 
-    /* ---- Step 1: try loading from rom_data/ extracted pages ---- */
-    int pagesLoaded = LoadExtractedPages();
-    if (pagesLoaded > 0) {
-        fprintf(stderr, "ROM data: loaded %d extracted pages from " ROM_EXTRACT_DIR "/\n", pagesLoaded);
-    }
-
-    /* ---- Step 2: try ROM files (USA first, then EU) ---- */
+    /* ---- Step 1: try ROM files (USA first, then EU) ---- */
     /*
      * Load a ROM file BEFORE assets so that ALL data regions are filled,
      * including assembled pointer tables (GfxGroups, PaletteGroups, area
@@ -1407,9 +1216,9 @@ void Port_LoadRom(const char* path) {
                     Port_FatalRomError("Minish Cap PC Port - ROM allocation failed", msg);
                 }
             }
-            /* The extracted-pages pass may already have sized the buffer at
-             * the full ROM length; a longer file (padded dump) is read up to
-             * the buffer rather than being called "loaded" without a read. */
+            /* A buffer allocated before this call keeps its size; a longer
+             * file (padded dump) is read up to the buffer rather than being
+             * called "loaded" without a read. */
             if (fileSize > gRomSize) {
                 fprintf(stderr, "WARNING: ROM %s is %u bytes; reading only the first %u\n", usedPath, fileSize,
                         gRomSize);
@@ -1437,10 +1246,9 @@ void Port_LoadRom(const char* path) {
     }
 
     /* ---- Check that we have some data ---- */
-    /* A full ROM file is required for normal play; extracted pages
-     * (rom_data/) are only useful as a supplemental source alongside a
-     * real ROM. Surface every "no real ROM" case as a fatal dialog
-     * rather than letting the engine boot into a black screen. */
+    /* A full ROM file is required for normal play. Surface every
+     * "no real ROM" case as a fatal dialog rather than letting the
+     * engine boot into a black screen. */
     if (!romLoaded) {
         Port_FatalRomError("Minish Cap PC Port - ROM not found",
                            "Could not load baserom.gba.\n\n"
@@ -1461,7 +1269,7 @@ void Port_LoadRom(const char* path) {
     }
 #endif
 
-    /* ---- Step 3: auto-detect ROM region ---- */
+    /* ---- Step 2: auto-detect ROM region ---- */
     RomRegion region = Port_DetectRomRegion(gRomData, gRomSize);
     const RomOffsets* R = gRomOffsets;
     if (region == ROM_REGION_UNKNOWN || R == NULL) {
@@ -1505,7 +1313,7 @@ void Port_LoadRom(const char* path) {
     }
 #endif
 
-    /* ---- Step 4: resolve ROM symbols using compile-time tables + gRomData ---- */
+    /* ---- Step 3: resolve ROM symbols using compile-time tables + gRomData ---- */
 
     /* gGlobalGfxAndPalettes — huge palette/gfx blob (still points into gRomData) */
     gGlobalGfxAndPalettes = &gRomData[R->gfxAndPalettes];
@@ -1849,48 +1657,46 @@ void Port_LoadRom(const char* path) {
         Port_InitDataStubs();
     }
 
-    /* ---- Extract all known ROM regions to rom_data/ ---- */
-    EnsureExtractDir();
-
+    /* ---- Mark all known ROM regions (quiets Port_LogRomAccess) ---- */
     /* ROM header (for game code verification) */
-    ExtractRegion(0, 0x200);
+    MarkRegionKnown(0, 0x200);
 
     /* Brightness/fade tables */
-    ExtractRegion(R->fadeData, 0x1200 - R->fadeData);
+    MarkRegionKnown(R->fadeData, 0x1200 - R->fadeData);
 
     /* Pointer tables themselves */
-    ExtractRegion(R->gfxGroups, R->gfxGroupsCount * 4);
-    ExtractRegion(R->paletteGroups, R->paletteGroupsCount * 4);
-    ExtractRegion(R->objPalettes, R->objPalettesCount * 4);
-    ExtractRegion(R->frameObjLists, R->frameObjListsSize);
+    MarkRegionKnown(R->gfxGroups, R->gfxGroupsCount * 4);
+    MarkRegionKnown(R->paletteGroups, R->paletteGroupsCount * 4);
+    MarkRegionKnown(R->objPalettes, R->objPalettesCount * 4);
+    MarkRegionKnown(R->frameObjLists, R->frameObjListsSize);
 
     /* Sprite pointer table + fixed type gfx data */
-    ExtractRegion(R->spritePtrs, R->spritePtrsCount * 16);
-    ExtractRegion(R->fixedTypeGfx, R->fixedTypeGfxCount * 4);
+    MarkRegionKnown(R->spritePtrs, R->spritePtrsCount * 16);
+    MarkRegionKnown(R->fixedTypeGfx, R->fixedTypeGfxCount * 4);
 
     /* Gfx+palette blob */
     if (gRomSize > R->gfxAndPalettes)
-        ExtractRegion(R->gfxAndPalettes, gRomSize - R->gfxAndPalettes);
+        MarkRegionKnown(R->gfxAndPalettes, gRomSize - R->gfxAndPalettes);
 
     /* Overlay size table */
-    ExtractRegion(R->overlaySizeTable, 240);
+    MarkRegionKnown(R->overlaySizeTable, 240);
 
     /* Area data pointer tables */
-    ExtractRegion(R->areaRoomHeaders, AREA_COUNT * 4);
-    ExtractRegion(R->areaTileSets, R->areaTileSetsCount * 4);
-    ExtractRegion(R->areaRoomMaps, AREA_COUNT * 4);
-    ExtractRegion(R->areaTable, AREA_COUNT * 4);
-    ExtractRegion(R->areaTiles, AREA_COUNT * 4);
-    ExtractRegion(R->exitLists, AREA_COUNT * 4);
+    MarkRegionKnown(R->areaRoomHeaders, AREA_COUNT * 4);
+    MarkRegionKnown(R->areaTileSets, R->areaTileSetsCount * 4);
+    MarkRegionKnown(R->areaRoomMaps, AREA_COUNT * 4);
+    MarkRegionKnown(R->areaTable, AREA_COUNT * 4);
+    MarkRegionKnown(R->areaTiles, AREA_COUNT * 4);
+    MarkRegionKnown(R->exitLists, AREA_COUNT * 4);
 
     /* Font/text data region */
     {
         u32 textStart = R->translations;
         u32 textEnd = R->text094CE + 1378 + 0x100; /* conservative region */
-        ExtractRegion(textStart, textEnd - textStart);
+        MarkRegionKnown(textStart, textEnd - textStart);
     }
 
-    /* Extract area sub-table data (referenced by pointer tables) */
+    /* Area sub-table data (referenced by pointer tables) */
     for (u32 i = 0; i < AREA_COUNT; i++) {
         u32 tables[] = { R->areaRoomHeaders, R->areaTileSets, R->areaRoomMaps, R->areaTable, R->areaTiles };
         for (u32 t = 0; t < 5; t++) {
@@ -1899,12 +1705,12 @@ void Port_LoadRom(const char* path) {
             u32 ptr;
             memcpy(&ptr, &gRomData[tables[t] + i * 4], 4);
             if (ptr >= 0x08000000u && ptr < 0x08000000u + gRomSize) {
-                ExtractRegion(ptr - 0x08000000u, ROM_PAGE_SIZE);
+                MarkRegionKnown(ptr - 0x08000000u, ROM_PAGE_SIZE);
             }
         }
     }
 
-    /* Extract sprite pointer referenced data */
+    /* Sprite pointer referenced data */
     {
         const u8* src = &gRomData[R->spritePtrs];
         for (u32 i = 0; i < R->spritePtrsCount; i++) {
@@ -1914,7 +1720,7 @@ void Port_LoadRom(const char* path) {
             memcpy(&ptrs[2], src + i * 16 + 8, 4); /* ptr */
             for (int p = 0; p < 3; p++) {
                 if (ptrs[p] >= 0x08000000u && ptrs[p] < 0x08000000u + gRomSize) {
-                    ExtractRegion(ptrs[p] - 0x08000000u, ROM_PAGE_SIZE);
+                    MarkRegionKnown(ptrs[p] - 0x08000000u, ROM_PAGE_SIZE);
                 }
             }
         }
