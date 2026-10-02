@@ -851,7 +851,9 @@ static int sSuspendFailed = 0;
 
 int Port_QuickSave_WillSuspend(void) {
     return !sSuspendFailed && Port_Config_SuspendOnQuit() && !Port_Config_GetConsoleParity() &&
-           gMain.task == TASK_GAME && gMain.state == GAMETASK_MAIN;
+           gMain.task == TASK_GAME && gMain.state == GAMETASK_MAIN &&
+           (gMain.substate == GAMEMAIN_UPDATE || gMain.substate == GAMEMAIN_BARRELUPDATE ||
+            gMain.substate == GAMEMAIN_SUBTASK);
 }
 
 /* Called from the frame loop's quit path, at a frame boundary. Durable write:
