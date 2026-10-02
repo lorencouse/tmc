@@ -212,6 +212,12 @@ pointers that are only valid in the process that wrote them — so inventory,
 flags, health and position carry over while room state starts fresh; the toast
 reads "room re-entered".
 
+**Suspend on quit** (**F8 → Saves**, `suspend_on_quit` in `config.json`, off
+by default) applies this to quitting: Exit Game, the window's close button or a
+SIGTERM from the frontend during play writes `state_suspend.bin` instead of
+asking to save, and the next launch resumes there from the title screen. The
+file is deleted as it is resumed, so a crash does not loop back into it.
+
 **F8 → Saves** is a picker, not just a list: every slot shows a preview
 thumbnail of the moment it was taken alongside its timestamp. Twenty identical
 dates say nothing about which state is the one you want.

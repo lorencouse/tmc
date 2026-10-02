@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Suspend on quit (issue #2): with "Suspend on quit" on (F8 → Save States,
+- Suspend on quit (issue #2): with "Suspend on quit" on (F8 → Saves,
   `suspend_on_quit` in `config.json`, off by default), quitting during play
   through Exit Game, the window's close button or a SIGTERM from the frontend
   writes `state_suspend.bin`, and the next launch resumes there from the title
