@@ -626,6 +626,16 @@ jobs:
           # plays USA/EU/JP at runtime (hence the "multi" artifact name).
           python3 build.py --usa --slim
 
+      # The tools/*_regression_test.py suites compile production sources
+      # against small fixtures (no ROM). Without a CI run they only got
+      # exercised by hand and rotted unnoticed. After the build above so
+      # region_regression_test finds the multi-region port_rom.c object and
+      # SDL3/nlohmann-json headers are in xmake's package cache.
+      - name: Regression suites (Linux)
+        if: matrix.os_name == 'linux' && matrix.arch == 'x86_64'
+        shell: bash
+        run: tools/run_regression_tests.sh
+
       - name: Dump xmake install logs (Windows, post-build on failure)
         if: failure() && matrix.os_name == 'windows'
         shell: bash

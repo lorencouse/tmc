@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Exercise production widescreen engine helpers without a ROM or SDL build."""
-import os
 from pathlib import Path
-import shlex
 import subprocess
 import tempfile
+
+from regression_build import cc
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -38,7 +38,7 @@ def main():
         generated = Path(directory) / 'widescreen_helpers.h'
         generated.write_text('\n'.join(functions))
         binary = Path(directory) / 'test'
-        command = shlex.split(os.environ.get('CC', 'cc')) + [
+        command = cc() + [
             '-std=c11', '-Wall', '-Wextra', '-Werror', '-I' + directory,
             str(ROOT / 'tools/tests/widescreen_engine.c'), '-o', str(binary)]
         subprocess.run(command, check=True)
