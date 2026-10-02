@@ -16,9 +16,11 @@ assembly byte-for-byte), that work belongs upstream at zeldaret/tmc — see
   `xmake` dev cycle) and [INSTALL.md](INSTALL.md) for build options.
 - You need your own ROM at the repo root — it is **not** shipped. USA
   `baserom.gba`, SHA1 `b4bd50e4131b027c334547b4524e2dbbd4227130`.
-- There is **no automated test suite.** Verification is interactive play, the
-  **F8** warp/debug menu, capturing repros with **F9**, and comparing against
-  GBA reference behaviour.
+- There is no full-game test suite. Verification is mostly interactive play,
+  the **F8** warp/debug menu, capturing repros with **F9**, and comparing
+  against GBA reference behaviour. Focused ROM-free regression suites
+  (`tools/*_regression_test.py`) run in Linux CI; run them locally with
+  `tools/run_regression_tests.sh`.
 - Code-quality conventions for this port (header ownership, the metrics that
   matter, when to add a characterization test) live in
   [docs/MAINTAINABILITY.md](docs/MAINTAINABILITY.md).
@@ -214,7 +216,8 @@ of `tools/ppu_corpus.txt`).
 - Keep PRs focused — one logical change per PR where practical.
 - Match the existing code style and the `#ifdef PC_PORT` convention; don't
   reformat unrelated lines.
-- Say **how you tested** (which area / repro), since there is no CI test gate.
+- Say **how you tested** (which area / repro), since CI only covers the
+  focused regression suites, not gameplay.
 - For larger work, open an issue first so we can coordinate.
 
 - If you touched `src/`, or anything related to `asm/`/`linker.ld`, read
