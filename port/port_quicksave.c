@@ -18,6 +18,10 @@
  *   slot 20-22: auto-save ring (Port_QuickSave_AutoTick cycles through
  *              these). Not selectable — the ring would overwrite a
  *              hand-made state parked there.
+ *   suspend:   one more slot past the public range (state_suspend.bin),
+ *              written on quit when suspend_on_quit is on and consumed by
+ *              the next launch. Not listed in the Saves tab; see
+ *              Port_QuickSave_Suspend.
  *
  * File format (disk persistence):
  *   magic     "TMCS"                          (4 bytes)
@@ -101,6 +105,11 @@ extern u32 gRand; /* port_linked_stubs.c; restored on a cross-session resume */
 #define NUM_AUTO_SLOTS 3
 #define AUTO_SLOT_BASE NUM_MANUAL_SLOTS
 #define NUM_SLOTS (NUM_MANUAL_SLOTS + NUM_AUTO_SLOTS)
+/* The suspend slot sits after every slot the public API can address, so the
+ * menu, the selection cursor and the auto ring never see it. Only the
+ * in-memory slot and its disk file exist for it -- no thumbnail. */
+#define SUSPEND_SLOT NUM_SLOTS
+#define NUM_SLOT_STORAGE (NUM_SLOTS + 1)
 #define MAGIC 0x53434D54u /* "TMCS" little-endian */
 #define VERSION                                         \
     8u /* v2: header carries gEntities base address for \
@@ -168,7 +177,7 @@ static u64 sDiskSavedAt[NUM_SLOTS];
  * by an older build), and we must not re-open the missing file every frame. */
 static int sThumbProbed[NUM_SLOTS];
 
-static Slot sSlots[NUM_SLOTS];
+static Slot sSlots[NUM_SLOT_STORAGE];
 static int sAutoNextSlot = AUTO_SLOT_BASE; /* round-robin cursor */
 static u64 sAutoLastSaveTicksMs = 0;
 static int sAutoEnabled = 1;        /* on by default — the F8
@@ -425,7 +434,9 @@ static u32 ActiveRegionTag(void) {
 
 static void SlotFilename(int slot, char* out, size_t cap) {
     const char* prefix = REGION_IS_EU ? "state_eu" : REGION_IS_JP ? "state_jp" : "state";
-    if (slot >= AUTO_SLOT_BASE) {
+    if (slot == SUSPEND_SLOT) {
+        snprintf(out, cap, "%s_suspend.bin", prefix);
+    } else if (slot >= AUTO_SLOT_BASE) {
         snprintf(out, cap, "%s_auto_%d.bin", prefix, slot - AUTO_SLOT_BASE);
     } else if (slot == 0) {
         snprintf(out, cap, "%s_quick.bin", prefix);
@@ -554,7 +565,7 @@ static int ReadThumbFromDisk(int slot) {
 }
 
 static int WriteSlotToDisk(int slot, int durable) {
-    if (slot < 0 || slot >= NUM_SLOTS)
+    if (slot < 0 || slot >= NUM_SLOT_STORAGE)
         return 0;
     Slot* s = &sSlots[slot];
     if (!s->valid || s->snapshot == NULL)
@@ -610,7 +621,7 @@ static int ReadSlotHeader(FILE* f, u32* magic, u32* version, u32* total, u64* sa
 }
 
 static int ReadSlotFromDisk(int slot) {
-    if (slot < 0 || slot >= NUM_SLOTS)
+    if (slot < 0 || slot >= NUM_SLOT_STORAGE)
         return 0;
     char path[64];
     SlotFilename(slot, path, sizeof(path));
@@ -827,6 +838,101 @@ int Port_QuickSave_HasSnapshot(void) {
     return Port_QuickSave_HasSlot(0);
 }
 
+/* ---- Suspend on quit ------------------------------------------------- *
+ * With suspend_on_quit on, quitting from gameplay writes the suspend slot
+ * and the next launch resumes it from the title screen. The resume is always
+ * cross-session, so it goes through ResumeFromSnapshot: the save file comes
+ * back exactly, and the room is re-entered at the spot the player stood. */
+
+int Port_QuickSave_WillSuspend(void) {
+    return Port_Config_SuspendOnQuit() && !Port_Config_GetConsoleParity() && gMain.task == TASK_GAME;
+}
+
+/* Called from the frame loop's quit path, at a frame boundary. Durable write:
+ * the process exits right after, and the frontend may cut power soon after. */
+int Port_QuickSave_Suspend(void) {
+    if (!Port_QuickSave_WillSuspend())
+        return 0;
+    if (!Snapshot_Capture(&sSlots[SUSPEND_SLOT]) || !WriteSlotToDisk(SUSPEND_SLOT, 1)) {
+        fprintf(stderr, "[suspend] FAILED to write the suspend state\n");
+        return 0;
+    }
+    fprintf(stderr, "[suspend] suspended at area=%u room=%u\n", gRoomControls.area, gRoomControls.room);
+    return 1;
+}
+
+extern bool Port_RandoSave_LoadSlot(int slot); /* rando/rando_save.h */
+extern void Rando_Reset(void);                 /* rando/rando.h */
+
+/* What file select's SetActiveSave() would have set up for the save file
+ * the suspend state belongs to, taken from the state's own copy of the
+ * EWRAM save header: which file slot in-game saves write to, the file's
+ * options, and its randomizer seed. gSave itself comes from the state. */
+static int ActivateSuspendedSaveFile(const Slot* s) {
+    const u8* ewram = SnapshotRegion(s, "gEwram");
+    if (ewram == NULL)
+        return 0;
+    const SaveHeader* hdr = (const SaveHeader*)(ewram + ((const u8*)gSaveHeader - gEwram));
+    if (hdr->saveFileId >= NUM_SAVE_SLOTS)
+        return 0;
+    gSaveHeader->saveFileId = hdr->saveFileId;
+    gSaveHeader->msg_speed = hdr->msg_speed;
+    gSaveHeader->brightness = hdr->brightness;
+    gUsedPalettes = 0xffffffff;
+    if (!Port_RandoSave_LoadSlot((int)hdr->saveFileId))
+        Rando_Reset();
+    return 1;
+}
+
+static void ResumeSuspendedState(void) {
+    char path[64];
+    SlotFilename(SUSPEND_SLOT, path, sizeof(path));
+    if (!Port_Config_SuspendOnQuit() || Port_Config_GetConsoleParity()) {
+        /* A leftover from before the setting was turned off. Resuming it
+         * later would roll the save file back to whenever it was written. */
+        if (remove(path) == 0)
+            fprintf(stderr, "[suspend] suspend_on_quit is off: discarded %s\n", path);
+        return;
+    }
+    Slot* s = &sSlots[SUSPEND_SLOT];
+    const int read = ReadSlotFromDisk(SUSPEND_SLOT);
+    /* Consumed before the resume runs, so a crash in or after it starts the
+     * next launch at the title screen rather than looping back here. */
+    if (remove(path) != 0 && errno != ENOENT)
+        fprintf(stderr, "[suspend] could not remove %s (%s)\n", path, strerror(errno));
+    if (!read)
+        return; /* none, or written by an incompatible build */
+    if (ActivateSuspendedSaveFile(s) && ResumeFromSnapshot(s)) {
+        extern void Port_Reborn_NotifyJustResumed(void);
+        Port_Reborn_NotifyJustResumed();
+        fprintf(stderr, "[suspend] resumed from %s\n", path);
+    } else {
+        fprintf(stderr, "[suspend] %s could not be resumed; starting at the title screen\n", path);
+    }
+    free(s->snapshot);
+    s->snapshot = NULL;
+    s->bytes = 0;
+    s->valid = 0;
+}
+
+/* Fires once, on the title screen, once boot has settled: the title task has
+ * reached its intro handlers and no fade is running -- the same point at
+ * which ExitTitlescreen() may leave for file select. Leaving TASK_TITLE any
+ * other way first (soft reset re-enters it) ends the chance for this run. */
+static void SuspendResumeTick(void) {
+    static int done = 0;
+    if (done)
+        return;
+    if (gMain.task != TASK_TITLE) {
+        done = 1;
+        return;
+    }
+    if (gMain.state != 1 || gFadeControl.active)
+        return;
+    done = 1;
+    ResumeSuspendedState();
+}
+
 /* Auto-save — call once per frame from VBlankIntrWait. Saves to the
  * next slot in the auto-save ring if enabled and the configured
  * interval has elapsed since the last auto-save. */
@@ -905,6 +1011,7 @@ static void ReproLoadSlotTick(void) {
 }
 
 void Port_QuickSave_AutoTick(void) {
+    SuspendResumeTick();
     ReproLoadSlotTick();
     if (QuickSaveReplayTestTick() || !sAutoEnabled)
         return;

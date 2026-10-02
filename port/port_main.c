@@ -930,6 +930,10 @@ int main(int argc, char* argv[]) {
     /* Last bridging splash before the game's title fade-in takes
      * over. After this the engine drives the frame loop. */
     PaintSplash(window, "STARTING");
+    {
+        extern void Port_InstallQuitSignalHandler(void);
+        Port_InstallQuitSignalHandler();
+    }
     fprintf(stderr, "Port layer initialized. Entering AgbMain...\n");
 
     AgbMain();

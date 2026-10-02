@@ -441,6 +441,12 @@ int Port_Config_IsCapturingBinding(void);
 int Port_Config_SaveStateSlot(void);
 void Port_Config_SetSaveStateSlot(int slot);
 
+/* suspend_on_quit in config.json, default off. When on, quitting from
+ * gameplay (Exit Game, the window's close button, SIGTERM) writes a suspend
+ * state and the next launch resumes it; see Port_QuickSave_Suspend. */
+bool Port_Config_SuspendOnQuit(void);
+void Port_Config_SetSuspendOnQuit(bool on);
+
 int Port_Config_PreferredRegion(void);
 void Port_Config_SetPreferredRegion(int region);
 int Port_Config_PreferredLanguage(void);
