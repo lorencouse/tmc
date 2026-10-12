@@ -1398,8 +1398,16 @@ GfxLoadDecision EvaluateGfxControl(u8 unknown) {
  * than pulling all of main.h into this translation unit. */
 extern "C" u16 gPaletteBuffer[];
 
+#if defined(JP)
+static constexpr RomRegion kAssetBaselineRegion = ROM_REGION_JP;
+#elif defined(EU)
+static constexpr RomRegion kAssetBaselineRegion = ROM_REGION_EU;
+#else
+static constexpr RomRegion kAssetBaselineRegion = ROM_REGION_USA;
+#endif
+
 extern "C" bool32 Port_LoadPaletteGroupFromAssets(u32 group) {
-    if (gRomRegion != ROM_REGION_USA) {
+    if (gRomRegion != kAssetBaselineRegion) {
         return FALSE;
     }
     if (!EnsureAssetGroupCache()) {
@@ -1454,9 +1462,9 @@ extern "C" bool32 Port_LoadPaletteGroupFromAssets(u32 group) {
 }
 
 extern "C" bool32 Port_LoadGfxGroupFromAssets(u32 group) {
-    /* Extracted asset caches use the build-time baseline. A universal build is
-     * USA-based, so non-USA ROMs must retain their runtime-resolved ROM tables. */
-    if (gRomRegion != ROM_REGION_USA) {
+    /* Extracted asset caches use the build-time baseline. A ROM from another
+     * region must retain its runtime-resolved ROM tables. */
+    if (gRomRegion != kAssetBaselineRegion) {
         return FALSE;
     }
     if (!EnsureAssetGroupCache()) {

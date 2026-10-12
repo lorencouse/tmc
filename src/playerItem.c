@@ -64,7 +64,12 @@ void ItemUpdate(Entity* this) {
         ItemInit(this);
 
     if (!EntityDisabled(this)) {
-        gPlayerItemFunctions[this->id](this);
+        if (this->id < ARRAY_COUNT(gPlayerItemFunctions) && gPlayerItemFunctions[this->id] != NULL) {
+            gPlayerItemFunctions[this->id](this);
+        } else {
+            DeleteThisEntity();
+            return;
+        }
         this->contactFlags &= ~CONTACT_NOW;
         if (this->iframes != 0) {
             if (this->iframes > 0)
@@ -78,6 +83,10 @@ void ItemUpdate(Entity* this) {
 
 void ItemInit(Entity* this) {
     u32 tmp2, tmp3;
+    if (this->id >= ARRAY_COUNT(gPlayerItemFunctions)) {
+        DeleteThisEntity();
+        return;
+    }
     const SpriteDataC* definition = &gPlayerItemDefinitions[this->id];
     if (definition->bitfield == 0xff) {
         u32 tmp = (u8)definition->unk;
