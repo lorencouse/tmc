@@ -953,6 +953,8 @@ static void HandleFileScreenExit(void) {
          * no hint is queued — the flag just gets consumed silently. */
         extern void Port_Reborn_NotifyJustResumed(void);
         Port_Reborn_NotifyJustResumed();
+        extern void Port_Qol_ResetItemText(void);
+        Port_Qol_ResetItemText();
 #endif
         SetTask(TASK_GAME);
     }

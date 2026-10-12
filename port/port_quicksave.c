@@ -84,6 +84,7 @@
 #include "player.h"
 #include "port_gba_mem.h"
 #include "port_runtime_config.h"
+#include "port_qol.h"
 #include "region.h" /* REGION_IS_EU/JP — per-region savestate isolation (#21) */
 #include "virtuappu.h" /* virtuappu_frame_buffer — slot thumbnails */
 
@@ -329,6 +330,7 @@ static int Snapshot_Restore(const Slot* s) {
     if (!s->valid || s->snapshot == NULL || s->bytes != TotalRegionBytes()) {
         return 0;
     }
+    Port_Qol_ResetItemText();
     if (s->saved_session != 0 && s->saved_session != SessionId())
         return ResumeFromSnapshot(s);
     const u8* src = s->snapshot;

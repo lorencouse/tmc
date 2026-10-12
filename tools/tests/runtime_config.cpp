@@ -49,5 +49,18 @@ int main(int argc, char** argv) {
     assert(Port_Config_GetPracticeSlowmo() == 0.05f);
     Port_Config_SetPracticeSlowmo(2);
     assert(Port_Config_GetPracticeSlowmo() == 1.0f);
+    // Issue #3 QoL toggles: off when absent, read when present, persisted by the setters.
+    load(path, R"({})");
+    assert(!Port_Config_GetSkipRepeatItemText() && !Port_Config_GetShortAnimations());
+    assert(!Port_Config_GetSkipCutscenes() && !Port_Config_GetFastPegasusCharge());
+    load(path, R"({"skip_repeat_item_text":true,"short_animations":true,"skip_cutscenes":"bad"})");
+    assert(Port_Config_GetSkipRepeatItemText() && Port_Config_GetShortAnimations());
+    assert(!Port_Config_GetSkipCutscenes() && !Port_Config_GetFastPegasusCharge());
+    Port_Config_SetSkipRepeatItemText(false);
+    Port_Config_SetSkipCutscenes(true);
+    Port_Config_SetFastPegasusCharge(true);
+    Port_Config_Load(path);
+    assert(!Port_Config_GetSkipRepeatItemText() && Port_Config_GetShortAnimations());
+    assert(Port_Config_GetSkipCutscenes() && Port_Config_GetFastPegasusCharge());
     puts("runtime config regression checks passed");
 }
