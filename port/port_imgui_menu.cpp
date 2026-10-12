@@ -4307,12 +4307,13 @@ static void DrawRibbonRebornTab(void) {
     if (ImGui::Checkbox("Skip repeat item text", &skipItemText))
         Port_Config_SetSkipRepeatItemText(skipItemText);
     RandoUi_HelpTooltip("An item-get text box (\"You got a red rupee!\") shows only the first time "
-                        "that message comes up after tmc_pc starts. Link still holds the item up.");
+                        "that message comes up on this save this session. Link still holds the "
+                        "item up.");
     bool shortAnims = Port_Config_GetShortAnimations();
     if (ImGui::Checkbox("Shorter animations", &shortAnims))
         Port_Config_SetShortAnimations(shortAnims);
     RandoUi_HelpTooltip("Kinstone fusion, the portal cutscenes and shrinking / growing at a portal "
-                        "play at 3x speed. Bag browsing and text boxes run at normal speed.");
+                        "play at 3x speed. Bag browsing and any open text box run at normal speed.");
     bool skipCutscenes = Port_Config_GetSkipCutscenes();
     if (ImGui::Checkbox("Skippable cutscenes (hold B)", &skipCutscenes))
         Port_Config_SetSkipCutscenes(skipCutscenes);

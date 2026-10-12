@@ -13,6 +13,7 @@
 #include "game.h"
 #include "main.h"
 #include "menu.h"
+#include "message.h"
 #include "player.h"
 #include "subtask.h"
 
@@ -33,7 +34,8 @@ static bool sSkipping;
 static bool sSkipBlocked;
 static unsigned sSkipHeld;
 static unsigned sSkipGrace;
-/* Item-get messages already shown this session, one bit per message index. */
+/* Item-get messages already shown on this save this session, one bit per
+ * message index. */
 static uint8_t sSeenItemText[0x10000 / 8];
 
 /* The subtask running right now, or -1 outside one. */
@@ -45,8 +47,11 @@ static int ActiveSubtask(void) {
 
 /* Kinstone fusion, portal and shrink / grow sequences: the parts that only
  * play out, never the parts that wait on the player (bag browsing, the
- * "fused" text box, standing on a portal). */
+ * "fused" text box, standing on a portal). Never while a text box is open,
+ * so text always types at normal speed. */
 static bool InShortenableAnimation(void) {
+    if ((gMessage.state & MESSAGE_ACTIVE) != 0)
+        return false;
     const int subtask = ActiveSubtask();
     if (subtask == SUBTASK_KINSTONEMENU) {
         /* 3: halves slide together, 4: mismatched halves slide apart,
@@ -130,9 +135,15 @@ bool Port_Qol_SkippingCutscene(void) {
 }
 
 bool Port_Qol_SkipItemText(uint32_t messageIndex) {
+    if (!Port_Config_GetSkipRepeatItemText())
+        return false;
     const uint32_t i = messageIndex & 0xFFFFu;
     const uint8_t bit = (uint8_t)(1u << (i & 7u));
     const bool seen = (sSeenItemText[i >> 3] & bit) != 0;
     sSeenItemText[i >> 3] |= bit;
-    return seen && Port_Config_GetSkipRepeatItemText();
+    return seen;
+}
+
+void Port_Qol_ResetItemText(void) {
+    memset(sSeenItemText, 0, sizeof(sSeenItemText));
 }

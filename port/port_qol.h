@@ -29,10 +29,14 @@ bool Port_Qol_Turbo(float* speed);
  * their own and draw at once; choice prompts still wait for the player. */
 bool Port_Qol_SkippingCutscene(void);
 
-/* Item-get text: true when this message was already shown this session and
- * skip_repeat_item_text is on, so the caller should not show it again.
- * Records the message as seen either way. */
+/* Item-get text: true when skip_repeat_item_text is on and this message was
+ * already shown on this save this session, so the caller should not show it
+ * again. With the toggle on, records the message as seen; off, does nothing. */
 bool Port_Qol_SkipItemText(uint32_t messageIndex);
+
+/* Forget which item-get messages were shown. Called when a file is loaded
+ * or a new game starts from the file screen. */
+void Port_Qol_ResetItemText(void);
 
 #ifdef __cplusplus
 }

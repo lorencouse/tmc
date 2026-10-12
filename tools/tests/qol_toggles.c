@@ -7,6 +7,7 @@ UI gUI;
 PlayerState gPlayerState;
 PlayerEntity gPlayerEntity;
 u8 _gMenuSharedStorage[0x40];
+Message gMessage;
 
 static bool cfgItemText, cfgShortAnims, cfgSkip;
 bool Port_Config_GetSkipRepeatItemText(void) { return cfgItemText; }
@@ -40,12 +41,16 @@ int main(void) {
     assert(!Turbo(&speed) && !Port_Qol_SkippingCutscene());
     assert(!Port_Qol_SkipItemText(0x0401) && !Port_Qol_SkipItemText(0x0401));
 
-    /* Item text: off records, on skips only what was already shown. */
+    /* Item text: off records nothing, on skips only what was already shown. */
     cfgItemText = true;
-    assert(Port_Qol_SkipItemText(0x0401));
+    assert(!Port_Qol_SkipItemText(0x0401) && Port_Qol_SkipItemText(0x0401));
     assert(!Port_Qol_SkipItemText(0x0402));
     assert(Port_Qol_SkipItemText(0x0402));
     assert(!Port_Qol_SkipItemText(0xFFFF) && Port_Qol_SkipItemText(0xFFFF));
+    /* Loading a file or starting a new game shows each message again. */
+    Port_Qol_ResetItemText();
+    assert(!Port_Qol_SkipItemText(0x0401) && Port_Qol_SkipItemText(0x0401));
+    assert(!Port_Qol_SkipItemText(0xFFFF));
 
     /* Short animations: the shrink runs at 3x; standing on the portal does not. */
     cfgShortAnims = true;
@@ -59,6 +64,10 @@ int main(void) {
     gPlayerEntity.base.subAction = 4; /* growing */
     Ticks(1, KEYS_NONE);
     assert(Turbo(&speed) && speed == 3.0f);
+    gMessage.state = 1; /* a text box is open: it types at normal speed */
+    Ticks(1, KEYS_NONE);
+    assert(!Turbo(&speed));
+    gMessage.state = 0;
     Port_Qol_Tick(KEYS_NONE, true); /* a settings overlay drops it */
     assert(!Turbo(&speed));
     gPlayerEntity.base.subAction = 7; /* hopping off: player-driven */
@@ -82,6 +91,15 @@ int main(void) {
     gMenu.overlayType = 2;
     Ticks(1, KEYS_NONE);
     assert(Turbo(&speed));
+    /* World events run fast, but not the text boxes they open. */
+    gUI.lastState = SUBTASK_WORLDEVENT;
+    Ticks(1, KEYS_NONE);
+    assert(Turbo(&speed));
+    gMessage.state = 1;
+    Ticks(1, KEYS_NONE);
+    assert(!Turbo(&speed));
+    gMessage.state = 0;
+    gUI.lastState = SUBTASK_KINSTONEMENU;
     cfgShortAnims = false;
     Ticks(1, KEYS_NONE);
     assert(!Turbo(&speed));

@@ -6,10 +6,11 @@
   F8 → Quality of Life and its own `config.json` key, all off by default:
   - Skip repeat item text (`skip_repeat_item_text`): an item-get text box such
     as "You got a red rupee!" shows only the first time that message comes up
-    after the game starts. Link still holds the item up.
+    on this save this session; loading a file or starting a new game shows
+    each one again. Link still holds the item up.
   - Shorter animations (`short_animations`): kinstone fusion, the portal
     cutscenes and shrinking or growing at a portal play at 3x speed. Bag
-    browsing and text boxes stay at normal speed.
+    browsing and any open text box stay at normal speed.
   - Skippable cutscenes (`skip_cutscenes`): during a cutscene, hold B for a
     third of a second to fast-forward it at the fast-forward speed. Text pages
     turn by themselves; choice prompts still wait. Every step of the scene

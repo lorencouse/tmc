@@ -135,7 +135,7 @@ void LinkHoldingItem_Action2(LinkHoldingItemEntity* this) {
                     }
 #ifdef PC_PORT
                     /* QoL skip_repeat_item_text: an item-get text already
-                     * shown this session is not shown again. Link still
+                     * shown on this save this session is not shown again. Link still
                      * holds the item up; nothing else waits on the box. */
                     if (Port_Qol_SkipItemText(messageIndex))
                         break;
