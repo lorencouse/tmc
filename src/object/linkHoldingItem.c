@@ -14,6 +14,9 @@
 #include "sound.h"
 #include "player.h"
 #include "save.h"
+#ifdef PC_PORT
+#include "port_qol.h"
+#endif
 
 typedef struct {
     /*0x00*/ Entity base;
@@ -130,6 +133,13 @@ void LinkHoldingItem_Action2(LinkHoldingItemEntity* this) {
                             }
                             break;
                     }
+#ifdef PC_PORT
+                    /* QoL skip_repeat_item_text: an item-get text already
+                     * shown this session is not shown again. Link still
+                     * holds the item up; nothing else waits on the box. */
+                    if (Port_Qol_SkipItemText(messageIndex))
+                        break;
+#endif
                     MessageFromTarget(messageIndex);
                     gMessage.rupees = super->type2;
                 }

@@ -91,7 +91,7 @@ TMC_AUTOPLAY=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./dist/USA/tmc_pc --n
 - Config and saves are runtime-local: `config.json`, `tmc.sav`, optional save profiles.
 
 ## Testing & QA
-- There is currently **no formal unit-test target**; `xmake test` is not valid for this project.
+- There is currently **no formal unit-test target**; `xmake test` is not valid for this project. ROM-free regression suites (`tools/*_regression_test.py`, harness sources in `tools/tests/`) run via `tools/run_regression_tests.sh`; header discovery is in `tools/regression_build.py`, and `*.py` is gitignored so new suites need `git add -f`.
 - Minimum verification for code changes: `xmake build -y tmc_pc` plus a smoke run that reaches `Port layer initialized. Entering AgbMain...`.
 - Full packaging verification: `python3 build.py --usa` or `python3 build.py --eur` when ROM/assets/package behavior is affected.
 - Useful smoke env: `TMC_AUTOPLAY=1`, `SDL_VIDEODRIVER=dummy`, `SDL_AUDIODRIVER=dummy`, and `--no-audio` for headless launch checks.
@@ -99,3 +99,10 @@ TMC_AUTOPLAY=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./dist/USA/tmc_pc --n
 - Manual QA tools: F8 debug menu, F9 bug report capture, F5/F6 quicksave/load, F7 TTS toggle, F12 upscaler cycle.
 - CI builds a multi-platform matrix via `.github/workflows/_build.yaml`; Linux release checks SDL3 audio backends (`alsa`, `pulseaudio`, `pipewire`).
 - `tools/ppu_bench.c` is a manual VirtuaPPU benchmark/parity helper, not a CI test.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

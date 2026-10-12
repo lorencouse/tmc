@@ -4303,6 +4303,26 @@ static void DrawRibbonRebornTab(void) {
     RandoUi_HelpTooltip("Each page of text appears at once instead of typing out, whatever the "
                         "save's Message Speed. Line breaks and scripted pauses still take a "
                         "moment. (The randomizer's Fast Text only sets Message Speed to Fast.)");
+    bool skipItemText = Port_Config_GetSkipRepeatItemText();
+    if (ImGui::Checkbox("Skip repeat item text", &skipItemText))
+        Port_Config_SetSkipRepeatItemText(skipItemText);
+    RandoUi_HelpTooltip("An item-get text box (\"You got a red rupee!\") shows only the first time "
+                        "that message comes up after tmc_pc starts. Link still holds the item up.");
+    bool shortAnims = Port_Config_GetShortAnimations();
+    if (ImGui::Checkbox("Shorter animations", &shortAnims))
+        Port_Config_SetShortAnimations(shortAnims);
+    RandoUi_HelpTooltip("Kinstone fusion, the portal cutscenes and shrinking / growing at a portal "
+                        "play at 3x speed. Bag browsing and text boxes run at normal speed.");
+    bool skipCutscenes = Port_Config_GetSkipCutscenes();
+    if (ImGui::Checkbox("Skippable cutscenes (hold B)", &skipCutscenes))
+        Port_Config_SetSkipCutscenes(skipCutscenes);
+    RandoUi_HelpTooltip("During a cutscene, hold B to fast-forward it at the Fast-forward speed: "
+                        "text pages turn by themselves, and choice prompts still wait for you. "
+                        "Everything the scene does still happens.");
+    bool fastBoots = Port_Config_GetFastPegasusCharge();
+    if (ImGui::Checkbox("Faster Pegasus charge", &fastBoots))
+        Port_Config_SetFastPegasusCharge(fastBoots);
+    RandoUi_HelpTooltip("Pegasus Boots start the dash after half the usual charge-up.");
     if (ImGui::BeginTable("##qol_extras_table", 2, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 150.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);

@@ -19,13 +19,17 @@
  * GBA-identical timing (one fresh press per page, important for timed
  * cutscenes). Both message-advance sites read this macro. */
 extern bool Port_Config_GetHoldToAdvanceText(void);
-#define MESSAGE_PRESS_ANY_ADVANCE_KEYS                 \
-    (((gInput.newKeys & MESSAGE_ADVANCE_KEYS) != 0) || \
-     (Port_Config_GetHoldToAdvanceText() && (gInput.heldKeys & MESSAGE_ADVANCE_KEYS) != 0))
+#define MESSAGE_PRESS_ANY_ADVANCE_KEYS                                                         \
+    (((gInput.newKeys & MESSAGE_ADVANCE_KEYS) != 0) ||                                         \
+     (Port_Config_GetHoldToAdvanceText() && (gInput.heldKeys & MESSAGE_ADVANCE_KEYS) != 0) || \
+     Port_Qol_SkippingCutscene())
 /* Port QoL (default off): "instant text" — TextDispUpdate draws each page in
  * one go whatever the save's msg_speed; line breaks and scripted pauses still
  * take their few frames. */
 extern bool Port_Config_GetInstantText(void);
+/* Port QoL (default off): a hold-B cutscene skip pages text by itself and
+ * draws it at once. Choice prompts read their own keys and still wait. */
+extern bool Port_Qol_SkippingCutscene(void);
 #else
 #define MESSAGE_PRESS_ANY_ADVANCE_KEYS ((gInput.newKeys & MESSAGE_ADVANCE_KEYS) != 0)
 #endif
@@ -571,7 +575,7 @@ static void TextDispUpdate(TextRender* this) {
     }
     this->typeSpeed -= speedModifier;
 #ifdef PC_PORT
-    if (Port_Config_GetInstantText())
+    if (Port_Config_GetInstantText() || Port_Qol_SkippingCutscene())
         this->typeSpeed = 0;
 #endif
 
@@ -585,7 +589,7 @@ static void TextDispUpdate(TextRender* this) {
         this->typeSpeed += speeds[this->message.textSpeed];
     } while (this->typeSpeed <= 0);
 #ifdef PC_PORT
-    if (Port_Config_GetInstantText())
+    if (Port_Config_GetInstantText() || Port_Qol_SkippingCutscene())
         numCharsToRead = 0x7FFF; /* the loop below stops at the break/pause */
 #endif
 

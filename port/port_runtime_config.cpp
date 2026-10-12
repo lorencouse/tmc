@@ -206,6 +206,10 @@ float sMusicVolume = 1.0f;     /* music (BGM player) volume [0,1] */
 float sSfxVolume = 1.0f;       /* sound-effect volume [0,1] */
 bool sHoldAdvanceText = false; /* hold an advance key to keep paging text */
 bool sInstantText = false;     /* QoL: whole text page at once */
+bool sSkipRepeatItemText = false; /* QoL: item-get text only the first time per session */
+bool sShortAnimations = false;    /* QoL: fusion / portal / shrink-grow at 3x */
+bool sSkipCutscenes = false;      /* QoL: hold B to fast-forward a cutscene */
+bool sFastPegasusCharge = false;  /* QoL: Pegasus Boots charge in half the time */
 int sTunicColor = 0;           /* QoL: vanilla-play tunic palette, 0 = vanilla */
 int sHeartColor = 0;           /* QoL: vanilla-play heart palette, 0 = vanilla */
 int sLowHealthBeep = 0;        /* QoL: PORT_LOW_HEALTH_BEEP_* */
@@ -348,6 +352,10 @@ const BoolCfg kBoolCfg[] = {
     { "menu_hint_seen", &sMenuHintSeen, false },
     { "hold_advance_text", &sHoldAdvanceText, false },
     { "instant_text", &sInstantText, false },
+    { "skip_repeat_item_text", &sSkipRepeatItemText, false },
+    { "short_animations", &sShortAnimations, false },
+    { "skip_cutscenes", &sSkipCutscenes, false },
+    { "fast_pegasus_charge", &sFastPegasusCharge, false },
     { "roll_attack_macro", &sRollAttackMacroEnabled, true },
     { "select_state_chords", &sSelectStateChords, false },
     { "fullscreen", &sFullscreen, false },
@@ -2143,6 +2151,38 @@ extern "C" bool Port_Config_GetInstantText(void) {
 extern "C" void Port_Config_SetInstantText(bool on) {
     sInstantText = on;
     sConfigJson["instant_text"] = on;
+    SaveConfig();
+}
+extern "C" bool Port_Config_GetSkipRepeatItemText(void) {
+    return sSkipRepeatItemText;
+}
+extern "C" void Port_Config_SetSkipRepeatItemText(bool on) {
+    sSkipRepeatItemText = on;
+    sConfigJson["skip_repeat_item_text"] = on;
+    SaveConfig();
+}
+extern "C" bool Port_Config_GetShortAnimations(void) {
+    return sShortAnimations;
+}
+extern "C" void Port_Config_SetShortAnimations(bool on) {
+    sShortAnimations = on;
+    sConfigJson["short_animations"] = on;
+    SaveConfig();
+}
+extern "C" bool Port_Config_GetSkipCutscenes(void) {
+    return sSkipCutscenes;
+}
+extern "C" void Port_Config_SetSkipCutscenes(bool on) {
+    sSkipCutscenes = on;
+    sConfigJson["skip_cutscenes"] = on;
+    SaveConfig();
+}
+extern "C" bool Port_Config_GetFastPegasusCharge(void) {
+    return sFastPegasusCharge;
+}
+extern "C" void Port_Config_SetFastPegasusCharge(bool on) {
+    sFastPegasusCharge = on;
+    sConfigJson["fast_pegasus_charge"] = on;
     SaveConfig();
 }
 /* Hand-edited config can hold anything; 0..hi or back to the default 0. */

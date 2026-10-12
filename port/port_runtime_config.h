@@ -314,6 +314,19 @@ int Port_Config_GetHeartColor(void);
 void Port_Config_SetHeartColor(int color);
 int Port_Config_GetLowHealthBeep(void);
 void Port_Config_SetLowHealthBeep(int mode);
+/* More QoL toggles (issue #3), all default off. skip_repeat_item_text shows
+ * an item-get text box only the first time that exact message comes up this
+ * session; short_animations runs kinstone fusion, portal and shrink / grow
+ * sequences at 3x; skip_cutscenes fast-forwards a cutscene while B is held;
+ * fast_pegasus_charge halves the Pegasus Boots charge-up. See port_qol.h. */
+bool Port_Config_GetSkipRepeatItemText(void);
+void Port_Config_SetSkipRepeatItemText(bool on);
+bool Port_Config_GetShortAnimations(void);
+void Port_Config_SetShortAnimations(bool on);
+bool Port_Config_GetSkipCutscenes(void);
+void Port_Config_SetSkipCutscenes(bool on);
+bool Port_Config_GetFastPegasusCharge(void);
+void Port_Config_SetFastPegasusCharge(bool on);
 bool Port_Config_GetRollAttackMacroEnabled(void);
 bool Port_Config_GetSelectStateChords(void);
 void Port_Config_SetRollAttackMacroEnabled(bool on);

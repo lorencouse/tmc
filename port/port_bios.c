@@ -18,6 +18,7 @@
 #include "port_ra.h"
 #endif
 #include "port_practice.h"
+#include "port_qol.h"
 #include "port_runtime_config.h"
 #include "port_roll_attack_macro.h"
 #include "port_softslots.h"
@@ -237,6 +238,7 @@ static void Port_UpdateInput(void) {
             if (sSelState != SEL_CHORD)
                 sSelState = SEL_IDLE;
             sSelPulse = 0;
+            Port_Qol_Tick(keyinput, true);
             sFrameNum++;
             return;
         }
@@ -285,6 +287,9 @@ static void Port_UpdateInput(void) {
         extern void Port_A11y_Update(void);
         Port_A11y_Update();
     }
+
+    /* QoL turbo / cutscene skip / item text state for this tick. */
+    Port_Qol_Tick(*(vu16*)(gIoMem + REG_OFFSET_KEYINPUT), false);
 
     /* Late half of the rando repro: applies the homewarp stage's queued
      * KEYINPUT presses after the store above (the early tick at the top
@@ -1034,6 +1039,12 @@ void VBlankIntrWait(void) {
         SDL_Delay(4); /* ~4ms: responsive UI without a busy spin */
     }
 
+    /* QoL short animations / hold-B cutscene skip run the engine fast the
+     * way a held fast-forward does; a real fast-forward takes precedence.
+     * Not while the settings menu is open. */
+    float qolSpeed = 0.0f;
+    const bool qolTurbo = !sFastForward && !Port_DebugMenu_IsOpen() && Port_Qol_Turbo(&qolSpeed);
+
     /* Toggle VSync based on whether we're trying to run faster than the
      * display refresh: fast-forward, or a target FPS preset > 60. With
      * VSync on, SDL_RenderPresent caps us at the display rate regardless
@@ -1068,7 +1079,7 @@ void VBlankIntrWait(void) {
             if (ffAt >= 0 && ++ffTicks > (u32)ffAt)
                 sFastForward = true;
         }
-        bool mustDisable = sFastForward || targetFps == 0 || targetFps > vsyncCeiling + 1;
+        bool mustDisable = sFastForward || qolTurbo || targetFps == 0 || targetFps > vsyncCeiling + 1;
         /* TMC_PACE_VSYNC_OFF_AFTER=<ticks>: pacing experiment -- start with the
          * configured VSync, then switch it off for good after this many ticks.
          * On the RG35XX SP a software renderer created with VSync off presents
@@ -1099,6 +1110,9 @@ void VBlankIntrWait(void) {
     }
 
     decoupled = Port_Config_GetDecoupleRender() && !Port_PacingForceLegacy();
+    /* sFastForward can be set by the harness knob above, so read it after. */
+    const bool ffOn = sFastForward || qolTurbo;
+    const float ffSpeed = sFastForward ? Port_Config_FastForwardSpeed() : qolTurbo ? qolSpeed : 0.0f;
 
     if (!decoupled) {
         /* ---- Legacy coupled loop: one present per engine tick, then pace
@@ -1130,10 +1144,9 @@ void VBlankIntrWait(void) {
          * don't burn CPU catching up. */
         /* A capped fast-forward (fast_forward_speed > 0) paces at speed x the
          * normal frame rate, which in this loop is the game speed. */
-        const float ffSpeed = sFastForward ? Port_Config_FastForwardSpeed() : 0.0f;
-        if (!sFastForward || ffSpeed > 0.0f) {
+        if (!ffOn || ffSpeed > 0.0f) {
             u64 frameTimeNs = Port_Config_FrameTimeNs();
-            if (sFastForward) {
+            if (ffOn) {
                 frameTimeNs = (u64)((double)(frameTimeNs ? frameTimeNs : 16666667ULL) / ffSpeed);
             } else {
                 /* Practice slow-motion: stretch the target frame interval. Factor
@@ -1181,8 +1194,7 @@ void VBlankIntrWait(void) {
          * an engine tick. ---- */
         u64 entryNs = SDL_GetTicksNS();
         u32 targetFps = Port_Config_TargetFps();
-        const float ffSpeed = sFastForward ? Port_Config_FastForwardSpeed() : 0.0f;
-        bool uncappedTicks = (sFastForward && ffSpeed == 0.0f) || targetFps == 0;
+        bool uncappedTicks = (ffOn && ffSpeed == 0.0f) || targetFps == 0;
         u64 tickPeriodNs = 0;
         u64 renderPeriodNs;
         u64 now;
@@ -1211,9 +1223,9 @@ void VBlankIntrWait(void) {
          * real-time cadence for feedback while the engine runs free. Under
          * console parity Port_Config_FrameTimeNs pins this to the GBA rate,
          * which intentionally also pins presentation to one-per-tick. */
-        renderPeriodNs = (targetFps != 0 && !sFastForward) ? Port_Config_FrameTimeNs()
-                         : sFastForward                    ? 1000000000ULL / Port_Config_FastForwardFps()
-                                                           : 16666667ULL;
+        renderPeriodNs = (targetFps != 0 && !ffOn) ? Port_Config_FrameTimeNs()
+                         : ffOn                    ? 1000000000ULL / Port_Config_FastForwardFps()
+                                                   : 16666667ULL;
 
         /* Vsync-locked ticks. With VSync on, presents at the tick cadence and a
          * display whose refresh equals the tick rate, the blocking present IS

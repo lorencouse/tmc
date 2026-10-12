@@ -5,6 +5,9 @@
 #include "playeritem.h"
 #include "save.h"
 #include "sound.h"
+#ifdef PC_PORT
+#include "port_runtime_config.h"
+#endif
 
 void sub_08076964(ItemBehavior*, u32);
 void sub_080768F8(ItemBehavior*, u32);
@@ -91,7 +94,15 @@ void sub_08076964(ItemBehavior* this, u32 index) {
             UpdateItemAnim(this);
         }
 
+#ifdef PC_PORT
+        /* QoL fast_pegasus_charge: the dash starts at half the charge-up
+         * (0x0f ticks instead of 0x1e). */
+        ++gPlayerState.dash_state;
+        if (gPlayerState.dash_state == 0x1e ||
+            (Port_Config_GetFastPegasusCharge() && gPlayerState.dash_state >= 0x0f && gPlayerState.dash_state < 0x1e)) {
+#else
         if ((++gPlayerState.dash_state) == 0x1e) {
+#endif
             if ((gPlayerState.flags & PL_FLAGS2) != 0) {
                 gPlayerState.dash_state = 0;
                 DeleteItemBehavior(this, index);

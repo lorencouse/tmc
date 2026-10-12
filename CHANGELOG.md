@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- More quality-of-life toggles (issue #3), each its own row at the end of
+  F8 → Quality of Life and its own `config.json` key, all off by default:
+  - Skip repeat item text (`skip_repeat_item_text`): an item-get text box such
+    as "You got a red rupee!" shows only the first time that message comes up
+    after the game starts. Link still holds the item up.
+  - Shorter animations (`short_animations`): kinstone fusion, the portal
+    cutscenes and shrinking or growing at a portal play at 3x speed. Bag
+    browsing and text boxes stay at normal speed.
+  - Skippable cutscenes (`skip_cutscenes`): during a cutscene, hold B for a
+    third of a second to fast-forward it at the fast-forward speed. Text pages
+    turn by themselves; choice prompts still wait. Every step of the scene
+    still runs, so nothing is skipped over in the save.
+  - Faster Pegasus charge (`fast_pegasus_charge`): the dash starts after half
+    the usual charge-up.
+
 - Suspend on quit (issue #2): with "Suspend on quit" on (F8 → Saves,
   `suspend_on_quit` in `config.json`, off by default), quitting during play
   through Exit Game, the window's close button or a SIGTERM from the frontend

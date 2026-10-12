@@ -777,6 +777,7 @@ target("tmc_pc")
     -- Minish Cap Reborn parity toggles, ported from Admentus64/The-Minish-Cap-
     -- Reborn (GPL-3.0); GPL-3.0, see THIRD-PARTY-LICENSES.md.
     add_files("port/port_reborn.cpp")
+    add_files("port/port_qol.c")             -- issue #3 QoL toggles: item text, short animations, cutscene skip
     -- Env-gated auto-repro / capture harnesses (no-op when off).
     add_files("port/port_repro_perfcap.c")
     add_files("port/port_repro_rando.c")
