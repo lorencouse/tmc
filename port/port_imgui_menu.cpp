@@ -4307,8 +4307,8 @@ static void DrawRibbonRebornTab(void) {
     if (ImGui::Checkbox("Skip repeat item text", &skipItemText))
         Port_Config_SetSkipRepeatItemText(skipItemText);
     RandoUi_HelpTooltip("An item-get text box (\"You got a red rupee!\") shows only the first time "
-                        "that message comes up on this save this session. Link still holds the "
-                        "item up.");
+                        "that message comes up on this save this session. Loading a file or a "
+                        "save state shows each one again. Link still holds the item up.");
     bool shortAnims = Port_Config_GetShortAnimations();
     if (ImGui::Checkbox("Shorter animations", &shortAnims))
         Port_Config_SetShortAnimations(shortAnims);

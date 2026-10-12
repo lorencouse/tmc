@@ -35,7 +35,8 @@ bool Port_Qol_SkippingCutscene(void);
 bool Port_Qol_SkipItemText(uint32_t messageIndex);
 
 /* Forget which item-get messages were shown. Called when a file is loaded
- * or a new game starts from the file screen. */
+ * or a new game starts from the file screen, and on every save-state
+ * restore. */
 void Port_Qol_ResetItemText(void);
 
 #ifdef __cplusplus
